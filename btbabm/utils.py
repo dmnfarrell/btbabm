@@ -19,6 +19,7 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO, AlignIO
 import json
+import toytree
 
 def random_sequence(length=50):
     seq=''
@@ -77,6 +78,7 @@ def draw_tree(filename,df=None,col=None,width=500,**kwargs):
     return canvas
 
 def plot_grid(model,ax,colorby='loc_type', ns='herd_size', cmap='Blues', title='', **kwargs):
+    """Custom draw method for model graph network"""
 
     from matplotlib.colors import ListedColormap, LinearSegmentedColormap
     graph = model.G
@@ -93,21 +95,28 @@ def plot_grid(model,ax,colorby='loc_type', ns='herd_size', cmap='Blues', title='
         node_colors = [colormap[i] for i in states]
         cmap=None
     elif colorby == 'strain':
-        states = [f.main_strain() for f in model.grid.get_all_cell_contents()]
+        states = [n.main_strain() for n in model.grid.get_all_cell_contents()]
         colormap = strain_map
     elif colorby == 'herd_size':
-        node_colors = [len(f) for f in model.grid.get_all_cell_contents()]
+        node_colors = [len(n) for n in model.grid.get_all_cell_contents()]
     elif colorby == 'num_infected':
-        node_colors = [len(f.get_infected()) for f in model.grid.get_all_cell_contents()]
+        node_colors = [len(n.get_infected()) for n in model.grid.get_all_cell_contents()]
+    elif colorby == 'perc_infected':
+        node_colors = [len(n.get_infected())/len(n)*200 for n in model.grid.get_all_cell_contents()]
     if ns == 'herd_size':
-        sizes = [len(f)*20 for f in model.grid.get_all_cell_contents()]
+        sizes = [len(n)*20 for n in model.grid.get_all_cell_contents()]
     elif ns == 'num_infected':
-        sizes = [len(f.get_infected())*20 for f in model.grid.get_all_cell_contents()]
+        sizes = [len(n.get_infected())*20 for n in model.grid.get_all_cell_contents()]
+    elif ns == 'perc_infected':
+        sizes = [len(n.get_infected())/len(n)*200 for n in model.grid.get_all_cell_contents()]
     else:
         sizes=50
+
+    ec = ['red' if n.loc_type=='sett' else 'black' for n in model.grid.get_all_cell_contents()]
     pos = nx.kamada_kawai_layout(graph)
     nx.draw(graph, pos, width=.1, node_color=node_colors,node_size=sizes, cmap=cmap,
-            edgecolors='black',linewidths=0.3,alpha=0.8,font_size=8,ax=ax, **kwargs)
+            edgecolors=ec,linewidths=0.6,alpha=0.8,
+            font_size=8,ax=ax, **kwargs)
     #ax.legend()
     ax.set_title(title,fontsize=20)
     #plt.colorbar(ax)

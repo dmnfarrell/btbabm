@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
     ABM Model panel dashboard
@@ -6,12 +6,14 @@
     Copyright (C) Damien Farrell
 """
 
+import sys,os,time
+import pylab as plt
 import panel as pn
 import panel.widgets as pnw
 pn.extension('tabulator', css_files=[pn.io.resources.CSS_URLS['font-awesome']])
 
 from btbabm.models import FarmPathogenModel
-from btbabm.utils import *
+from btbabm import utils
 
 def dashboard():
 
@@ -26,9 +28,9 @@ def dashboard():
         callback(model)
         fig1,ax1 = plt.subplots(1,1,figsize=(15,10))
         grid_pane.object = fig1
-        fig2,ax2 = plt.subplots(1,1,figsize=(8,6))
+        fig2,ax2 = plt.subplots(1,1,figsize=(10,6))
         plot_pane1.object = fig2
-        fig3,ax3 = plt.subplots(1,1,figsize=(8,6))
+        fig3,ax3 = plt.subplots(1,1,figsize=(10,6))
         plot_pane2.object = fig3
         progress.max=steps
         progress.value = 0
@@ -49,7 +51,7 @@ def dashboard():
                 total = len(model.get_animals())
                 col = colorby_input.value
                 text='day=%s year=%s moves=%s deaths=%s animals=%s' %(i,y,mov,deaths,total)
-                plot_grid(model,ax=ax1,
+                utils.plot_grid(model,ax=ax1,
                           title=text, colorby=col, cmap=cmap_input.value,
                           ns=ns, with_labels=labels_input.value)
                 grid_pane.param.trigger('object')
@@ -57,8 +59,9 @@ def dashboard():
                 #s = model.circulating_strains()
                 d=model.get_infected_data()
                 df_pane.value = d
-
-                fig2=plot_inf_data(model)
+                hd = model.get_herds_data()
+                df2_pane.value = hd
+                fig2 = utils.plot_inf_data(model)
                 plot_pane1.object = fig2
                 plot_pane1.param.trigger('object')
                 df = model.get_column_data()
@@ -102,15 +105,17 @@ def dashboard():
     grid_pane = pn.pane.Matplotlib(plt.Figure(),tight=True,width=900,height=620)
     plot_pane1 = pn.pane.Matplotlib(plt.Figure(),height=300)
     plot_pane2 = pn.pane.Matplotlib(plt.Figure(),height=300)
-    df_pane = pn.pane.DataFrame(None, width=400)
     tree_pane = pn.pane.HTML()
+    str_pane = pnw.TextAreaInput(disabled=True,height=600,width=400)
+    df_pane = pnw.Tabulator(show_index=False,height=600)
+    df2_pane = pnw.Tabulator(show_index=False,height=600)
 
     w=120
     colorby = ['loc_type','herd_class','herd_size','num_infected']
     go_btn = pnw.Button(name='run',width=w,button_type='success')
     stop_btn = pnw.Button(name='stop',width=w,button_type='danger')
-    farms_input = pnw.IntSlider(name='farms',value=20,start=5,end=2000,step=1,width=w)
-    animals_input = pnw.IntSlider(name='cows',value=400,start=10,end=10000,step=10,width=w)
+    farms_input = pnw.IntSlider(name='farms',value=20,start=5,end=1000,step=1,width=w)
+    animals_input = pnw.IntSlider(name='cows',value=400,start=10,end=5000,step=10,width=w)
     setts_input = pnw.IntSlider(name='setts',value=5,start=1,end=100,step=1,width=w)
     farmtypes_input = pnw.Select(name='farm types',options=farm_types,width=w)
     cctrans_input = pnw.FloatSlider(name='CC trans',value=0.01,step=.001,start=0,end=1,width=w)
@@ -118,7 +123,7 @@ def dashboard():
     staytime_input = pnw.FloatSlider(name='mean stay time',value=100,step=1,start=5,end=1000,width=w)
     inftime_input = pnw.FloatSlider(name='mean inf. time',value=60,step=1,start=5,end=600,width=w)
     steps_input = pnw.IntSlider(name='steps',value=10,start=1,end=2000,width=w)
-    refresh_input = pnw.IntSlider(name='refresh rate',value=1,start=1,end=50,width=w)
+    refresh_input = pnw.IntSlider(name='refresh rate',value=1,start=1,end=100,width=w)
     delay_input = pnw.FloatSlider(name='step delay',value=0,start=0,end=3,step=.2,width=w)
     graph_input = pnw.Select(name='graph type',options=graph_types,width=w)
     graph_seed_input = pnw.IntInput(name='graph seed',value=10,width=w)
@@ -128,8 +133,6 @@ def dashboard():
     nodesize_input = pnw.Select(name='node size',options=colorby[2:],width=w)
     labels_input = pnw.Checkbox(name='node labels',value=False,width=w)
     progress = pn.indicators.Progress(name='Progress', value=0, width=400, bar_color='primary')
-    str_pane = pnw.TextAreaInput(disabled=True,height=600,width=400)
-    df_pane = pnw.Tabulator(show_index=False,height=600)
 
     widgets = pn.Column(pn.Tabs(('model',pn.WidgetBox(go_btn,farms_input,animals_input,setts_input,farmtypes_input,cctrans_input,bctrans_input,staytime_input,inftime_input,
                     steps_input,refresh_input,delay_input)),
@@ -144,7 +147,7 @@ def dashboard():
     go_btn.param.watch(execute, 'clicks')
 
     app = pn.Row(pn.Column(widgets),pn.Column(progress,grid_pane,sizing_mode='stretch_width'),
-                 pn.Tabs(('plots',pn.Column(plot_pane1,plot_pane2)), ('tree',tree_pane), ('inf_data',df_pane), ('debug',str_pane)),
+                 pn.Tabs(('plots',pn.Column(plot_pane1,plot_pane2)), ('tree',tree_pane), ('inf_data',df_pane), ('herd_data',df2_pane), ('debug',str_pane)),
                  sizing_mode='stretch_both',background='WhiteSmoke')
 
     return app
@@ -157,4 +160,4 @@ bootstrap.main.append(app)
 bootstrap.servable()
 
 if __name__ == '__main__':
-    pn.serve(bootstrap, port=5000)
+    pn.serve(bootstrap, port=5010)

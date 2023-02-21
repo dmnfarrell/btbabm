@@ -138,6 +138,7 @@ class Sett(Location):
         self.size = int(random.normalvariate(20,10))
         self.loc_type = 'sett'
         self.herd_class = None
+        self.moves = []
         return
 
      def __repr__(self):
@@ -153,21 +154,21 @@ class Animal(object):
         self.strain = None
         self.infection_start = 0
         self.age = 1
-        self.death_age = abs(int(random.normalvariate(8*365,1000)))
         self.model = model
-        self.farm = None
+        #self.farm = None
         return
 
-    def infect(self, strain):
+    def infect(self, strain, ptrans):
         """Infect the animal with some probability"""
 
-        if random.uniform(0, 1) < self.model.infection_prob:
+        if random.uniform(0, 1) < ptrans:
             self.state = State.INFECTED
             #strain may mutate upon transmission
             self.strain = strain.copy()
             strain.mutate()
             self.infection_start = self.model.schedule.time
-        return
+            return True
+        return False
 
 class Badger(Animal):
     """Animal agent that acts as wildlife reservoir"""
@@ -176,10 +177,12 @@ class Badger(Animal):
         super().__init__(unique_id, model)
         self.species = 'badger'
         self.time_last_move = 0
+        self.death_age = abs(int(random.normalvariate(8*365,1000)))
         self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
         self.moves = []
 
     def step(self):
+        """Do step"""
 
         self.age +=1
         self.move()
@@ -188,7 +191,7 @@ class Badger(Animal):
         if self.state == State.SUSCEPTIBLE:
             for animal in sett.get_infected():
                 if animal.state == State.INFECTED:
-                    self.infect(animal.strain)
+                    self.infect(animal.strain, self.model.bctrans)
 
         self.infection_status()
         return
@@ -207,14 +210,21 @@ class Badger(Animal):
         if len(nn) > 0:
             new = random.choice(nn)
             loc = self.model.get_node(new)
-            #if self.model.callback != None:
-            #    self.model.callback('BADGER MOVE')
-            #    self.model.callback([self,current_sett, loc, loc.animals])
             if self.state == State.INFECTED:
                 if type(loc) is Farm:
+                    #interact with random cows
                     for animal in loc.animals:
                         if animal.state == State.SUSCEPTIBLE:
-                            animal.infect(self.strain)
+                            animal.infect(self.strain, self.model.bctrans)
+                            if animal.state == State.INFECTED:
+                                if self.model.callback != None:
+                                    self.model.callback('badger infected cow')
+
+                elif self.state == State.SUSCEPTIBLE:
+                    #infect badger?
+                    for animal in loc.animals:
+                        if animal.state == State.INFECTED:
+                            self.infect(animal.strain, self.model.bctrans)
             self.time_last_move = t
         return
 
@@ -245,6 +255,8 @@ class Cow(Animal):
         self.stay_time = abs(int(random.normalvariate(model.mean_stay_time,100)))
         #time after infection to death
         self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
+        #natural age
+        self.death_age = abs(int(random.normalvariate(5*365,1000)))
         #time spent at current farm
         self.time_at_farm = 0
         self.moves = []
@@ -257,6 +269,7 @@ class Cow(Animal):
         """
 
         self.time_at_farm += 1
+        self.age +=1
         #print (self.model.schedule.time, self.time_at_farm,self.stay_time)
         if self.time_at_farm >= self.stay_time:
             self.move()
@@ -268,7 +281,7 @@ class Cow(Animal):
         if self.state == State.SUSCEPTIBLE:
             for animal in farm.get_infected():
                 if animal.state == State.INFECTED:
-                    self.infect(animal.strain)
+                    self.infect(animal.strain, self.model.cctrans)
         self.infection_status()
         return
 
@@ -287,9 +300,6 @@ class Cow(Animal):
             if not type(next_farm) is Farm:
                 return
 
-        #if self.model.callback != None:
-        #    self.model.callback('MOVE')
-        #    self.model.callback([self,current_farm, next_farm, current_farm.animals])
         current_farm.animals.remove(self)
         next_farm.animals.append(self)
         self.location = new
@@ -305,7 +315,7 @@ class Cow(Animal):
 
         if self.state == State.INFECTED:
             t = self.model.schedule.time-self.infection_start
-            if t >= self.time_to_death:
+            if t >= self.time_to_death  or self.age>self.death_age:
                 curr = self.location
                 current_farm = self.model.get_node(curr)
                 self.state = State.REMOVED
@@ -327,19 +337,21 @@ class Cow(Animal):
 
 
 class FarmPathogenModel(Model):
-    def __init__(self, F, C, S, mean_stay_time=100, mean_inf_time=60, cctrans=0.01, infected_start=5, seq_length=100,
+    def __init__(self, F, C, S, mean_stay_time=100, mean_inf_time=60, cctrans=0.01, bctrans=0.001,
+                 infected_start=5, seq_length=100,
                  graph_type='custom', graph_seed=None, callback=None):
 
         self.num_farms = F
         self.num_setts = S
         self.num_cows = C
-        self.num_badgers = S*5
+        self.num_badgers = S*8
 
         self.mean_stay_time = mean_stay_time
         self.mean_inf_time = mean_inf_time
-        self.infection_prob = cctrans
-        self.max_animals_per_farm = 500
-        self.max_farm_size = 100
+        self.cctrans = cctrans
+        self.bctrans = bctrans
+        self.max_herd_size = 100
+        self.max_sett_size = 15
 
         self.base_sequence = utils.random_sequence(seq_length)
         self.start_strains = {}
@@ -419,12 +431,9 @@ class FarmPathogenModel(Model):
 
         return self.G.nodes[node]['agent'][0]
 
-    '''def get_node(self, node):
-        x=model.grid.get_cell_list_contents([node])
-        if len(x)>0:
-            return x[0]'''
-
     def get_farms(self):
+        """Get farm nodes"""
+
         x=self.grid.get_all_cell_contents()
         return [i for i in x if type(i) is Farm]
 
@@ -467,6 +476,8 @@ class FarmPathogenModel(Model):
         animal = Badger(uid, model=self)
         if sett == None:
             sett = random.choice(self.get_setts())
+        if len(sett.animals)>self.max_sett_size:
+            return
         animal.location = sett.unique_id
         sett.animals.append(animal)
         #print (animal.unique_id)
@@ -481,13 +492,15 @@ class FarmPathogenModel(Model):
         return x
 
     def get_herds_data(self):
-        """Get summary dataframe of herd info"""
+        """Get summary dataframe of node info"""
 
         res=[]
-        for f in self.get_farms():
+        for f in self.grid.get_all_cell_contents():
+        #for f in self.get_farms():
             animals = f.animal_ids()
-            res.append([f.unique_id,f.herd_class,len(f.animals),len(f.get_infected()),f.get_strains(),animals,f.moves])
-        return pd.DataFrame(res,columns=['id','herd_class','size','infected','strains','animals','moves'])
+            res.append([f.unique_id,f.loc_type,f.herd_class,len(f.animals),len(f.get_infected()),#f.get_strains(),animals
+                        f.moves])
+        return pd.DataFrame(res,columns=['id','loc_type','herd_class','size','infected','moves'])
 
     def get_random_location(self, k=1):
         return random.sample(self.grid.get_all_cell_contents(), k)
@@ -509,7 +522,7 @@ class FarmPathogenModel(Model):
         for f in self.grid.get_all_cell_contents():
             for a in f.get_infected():
                 x.append([a.unique_id,a.species,a.strain.name,a.infection_start,t-a.infection_start,a.location,len(a.moves)])
-        df = pd.DataFrame(x,columns=['id','species','strain','inf_start','inf_time','farm','moves'])
+        df = pd.DataFrame(x,columns=['id','species','strain','inf_start','inf_time','herd','moves'])
         return df
 
     def get_sequences(self):
@@ -559,4 +572,6 @@ class FarmPathogenModel(Model):
         return cl
 
     def __repr__(self):
-        return 'model with %s farms, %s setts and %s animals' %(self.num_farms, self.num_setts, len(self.get_animals()))
+        l1 = 'model with %s farms, %s setts and %s animals\n' %(self.num_farms, self.num_setts, len(self.get_animals()))
+        l2 = 'CC rate:%s BC rate:%s' % (self.cctrans,self.bctrans)
+        return l1+l2
