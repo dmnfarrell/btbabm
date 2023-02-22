@@ -44,8 +44,8 @@ HERD_CLASSES = ['beef','dairy','beef suckler','fattening']
 class State(enum.IntEnum):
     SUSCEPTIBLE = 0
     INFECTED = 1
-    REMOVED = 2
-    IMMUNE = 3
+    LATENT = 2
+    REMOVED = 3
 
 class Strain:
     def __init__(self, name, sequence):
@@ -151,10 +151,7 @@ class Animal(object):
     def __init__(self, unique_id, model):
         self.unique_id = unique_id
         self.location = None
-        if random.choice(range(20)) == 1:
-            self.state = State.IMMUNE
-        else:
-            self.state = State.SUSCEPTIBLE
+        self.state = State.SUSCEPTIBLE
         self.strain = None
         self.infection_start = 0
         self.age = 1
@@ -166,7 +163,7 @@ class Animal(object):
         """Infect the animal with some probability"""
 
         if random.uniform(0, 1) < ptrans:
-            self.state = State.INFECTED
+            self.state = State.LATENT
             #strain may mutate upon transmission
             self.strain = strain.copy()
             strain.mutate()
@@ -182,6 +179,7 @@ class Badger(Animal):
         self.species = 'badger'
         self.time_last_move = 0
         self.death_age = abs(int(random.normalvariate(8*365,1000)))
+        self.latency_period = abs(int(random.normalvariate(300,100)))
         self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
         self.moves = []
 
@@ -238,12 +236,8 @@ class Badger(Animal):
         if self.state == State.INFECTED or self.age>self.death_age:
             t = self.model.schedule.time-self.infection_start
             if t >= self.time_to_death:
-                curr = self.location
-                current_sett = self.model.get_node(curr)
-                self.state = State.REMOVED
-                self.model.schedule.remove(self)
-                current_sett.animals.remove(self)
-                self.model.deaths +=1
+                self.model.remove_animal(self)
+                current_sett = self.model.get_node(self.location)
                 self.model.add_badger(sett=current_sett)
 
     def __repr__(self):
@@ -257,10 +251,12 @@ class Cow(Animal):
         self.species = 'cow'
         #stay time at current farm, updated when moved
         self.stay_time = abs(int(random.normalvariate(model.mean_stay_time,100)))
-        #time after infection to death
-        self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
         #natural age
         self.death_age = abs(int(random.normalvariate(4*365,1000)))
+        #time after infection to death
+        self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
+        #latency period when not infectious
+        self.latency_period = abs(int(random.normalvariate(model.mean_latency_time,100)))
         #time spent at current farm
         self.time_at_farm = 0
         self.moves = []
@@ -286,6 +282,7 @@ class Cow(Animal):
             for animal in farm.get_infected():
                 if animal.state == State.INFECTED:
                     self.infect(animal.strain, self.model.cctrans)
+
         self.infection_status()
         return
 
@@ -317,16 +314,13 @@ class Cow(Animal):
     def infection_status(self):
         """Check infection status and remove animal if dead."""
 
+        if self.state == State.SUSCEPTIBLE:
+            return
+        t = self.model.schedule.time-self.infection_start
         if self.state == State.INFECTED:
-            t = self.model.schedule.time-self.infection_start
             if t >= self.time_to_death or self.age>self.death_age:
-                curr = self.location
-                current_farm = self.model.get_node(curr)
-                self.state = State.REMOVED
-                self.model.schedule.remove(self)
-                current_farm.animals.remove(self)
-                self.model.deaths +=1
-
+                self.model.remove_animal(self)
+                current_farm = self.model.get_node(self.location)
                 #replace the animal in the population
                 if len(current_farm.animals)<2:
                     self.model.add_animal(farm=current_farm)
@@ -334,6 +328,9 @@ class Cow(Animal):
                     new_farm = random.choice(self.model.get_farms())
                     #print (current_farm,new_farm,model.farms[new_farm.unique_id])
                     self.model.add_animal(farm=new_farm)
+        elif self.state == State.LATENT:
+            if t >= self.latency_period:
+                self.state = State.INFECTED
         return
 
     def __repr__(self):
@@ -341,8 +338,9 @@ class Cow(Animal):
 
 
 class FarmPathogenModel(Model):
-    def __init__(self, F, C, S, mean_stay_time=100, mean_inf_time=60, cctrans=0.01, bctrans=0.001,
-                 infected_start=5, seq_length=100,
+    def __init__(self, F, C, S, mean_stay_time=100, mean_inf_time=60, mean_latency_time=100,
+                 cctrans=0.01, bctrans=0.001,
+                 infected_start=5, seq_length=100, #cull_rate=None,
                  graph_type='custom', graph_seed=None, callback=None):
 
         self.num_farms = F
@@ -352,6 +350,7 @@ class FarmPathogenModel(Model):
 
         self.mean_stay_time = mean_stay_time
         self.mean_inf_time = mean_inf_time
+        self.mean_latency_time = mean_latency_time
         self.cctrans = cctrans
         self.bctrans = bctrans
         self.max_herd_size = 100
@@ -377,8 +376,10 @@ class FarmPathogenModel(Model):
             self.G = nx.barabasi_albert_graph(n=total, m=3, seed=graph_seed)
         elif graph_type == 'watts_strogatz':
             self.G = nx.watts_strogatz_graph(n=total, k=4, p=0.1, seed=graph_seed)
+        elif graph_type == 'powerlaw_cluster':
+            self.G = nx.powerlaw_cluster_graph(n=total, m=3, p=0.5, seed=graph_seed)
         elif graph_type == 'random_geometric':
-            self.G = nx.random_geometric_graph(total, 0.125, seed=graph_seed)
+            self.G = nx.random_geometric_graph(n=total, p=0.2, seed=graph_seed)
         elif 'custom':
             self.G = utils.create_closest_n_graph(total,3)
         self.grid = NetworkGrid(self.G)
@@ -444,19 +445,10 @@ class FarmPathogenModel(Model):
         return [i for i in x if type(i) is Farm]
 
     def get_setts(self):
+        """Get setts"""
+
         x=self.grid.get_all_cell_contents()
         return [i for i in x if type(i) is Sett]
-
-    '''def get_farms(self):
-        """Get farms in graph"""
-
-        f = [self.get_node(n) for n in self.G.nodes]
-        return [i for i in f if type(i) == Farm]
-
-    def get_setts(self):
-
-        f = [self.get_node(n) for n in self.G.nodes]
-        return [i for i in f if type(i) == Sett]'''
 
     def add_animal(self, uid=None, farm=None):
         """Add cow. If no farm given, add randomly"""
@@ -475,6 +467,7 @@ class FarmPathogenModel(Model):
         return animal
 
     def add_badger(self, uid=None, sett=None):
+        """Add badger"""
 
         if uid==None:
             uid = self.agents_added+1
@@ -490,6 +483,16 @@ class FarmPathogenModel(Model):
         self.schedule.add(animal)
         self.agents_added += 1
         return animal
+
+    def remove_animal(self, animal):
+        """Remove from model"""
+
+        loc = self.get_node(animal.location)
+        animal.state = State.REMOVED
+        self.schedule.remove(animal)
+        loc.animals.remove(animal)
+        self.deaths +=1
+        return
 
     def get_animals(self, infected=False):
         """Get all animals into a list"""
@@ -520,7 +523,7 @@ class FarmPathogenModel(Model):
 
         agent_state = self.datacollector.get_agent_vars_dataframe()
         X = pd.pivot_table(agent_state.reset_index(),index='Step',columns='State',aggfunc=np.size,fill_value=0)
-        labels = ['Susceptible','Infected','Immune']
+        labels = ['Susceptible','Infected','Latent']
         X.columns = labels[:len(X.columns)]
         return X
 

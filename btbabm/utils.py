@@ -21,6 +21,10 @@ from Bio import SeqIO, AlignIO
 import json
 import toytree
 
+strain_names = string.ascii_letters[:10].upper()
+strain_cmap = ({c:random_color(seed=1) for c in strain_names})
+strain_cmap[None] = 'gray'
+
 def random_sequence(length=50):
     seq=''
     for count in range(length):
@@ -96,7 +100,7 @@ def plot_grid(model,ax,colorby='loc_type', ns='herd_size', cmap='Blues', title='
         cmap=None
     elif colorby == 'strain':
         states = [n.main_strain() for n in model.grid.get_all_cell_contents()]
-        colormap = strain_map
+        node_colors = [strain_cmap[n] for n in states]
     elif colorby == 'herd_size':
         node_colors = [len(n) for n in model.grid.get_all_cell_contents()]
     elif colorby == 'num_infected':
