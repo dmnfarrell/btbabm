@@ -135,3 +135,11 @@ def plot_herds_data(model):
     cols = ['size','infected']
     axs=df[cols].hist(grid=False,ec='black',bins=20)
     return axs.flat[3].get_figure()
+
+def plot_by_species(model):
+
+    df=model.get_animal_data()
+    x=pd.pivot_table(df,index='species',columns=['state'],values='id',aggfunc='count')
+    #print (x)
+    ax=x.plot(kind='bar')
+    return ax.get_figure()

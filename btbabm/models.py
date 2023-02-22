@@ -45,6 +45,7 @@ class State(enum.IntEnum):
     SUSCEPTIBLE = 0
     INFECTED = 1
     REMOVED = 2
+    IMMUNE = 3
 
 class Strain:
     def __init__(self, name, sequence):
@@ -150,7 +151,10 @@ class Animal(object):
     def __init__(self, unique_id, model):
         self.unique_id = unique_id
         self.location = None
-        self.state = State.SUSCEPTIBLE
+        if random.choice(range(20)) == 1:
+            self.state = State.IMMUNE
+        else:
+            self.state = State.SUSCEPTIBLE
         self.strain = None
         self.infection_start = 0
         self.age = 1
@@ -256,7 +260,7 @@ class Cow(Animal):
         #time after infection to death
         self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
         #natural age
-        self.death_age = abs(int(random.normalvariate(5*365,1000)))
+        self.death_age = abs(int(random.normalvariate(4*365,1000)))
         #time spent at current farm
         self.time_at_farm = 0
         self.moves = []
@@ -315,7 +319,7 @@ class Cow(Animal):
 
         if self.state == State.INFECTED:
             t = self.model.schedule.time-self.infection_start
-            if t >= self.time_to_death  or self.age>self.death_age:
+            if t >= self.time_to_death or self.age>self.death_age:
                 curr = self.location
                 current_farm = self.model.get_node(curr)
                 self.state = State.REMOVED
@@ -405,6 +409,8 @@ class FarmPathogenModel(Model):
         l = self.agents_added+1
         for i in range(l,l+self.num_badgers):
             animal = self.add_badger(i)
+            if animal == None:
+                continue
             if random.choice(range(5)) == 1:
                 animal.state = State.INFECTED
                 s = random.choice(strain_names)
@@ -485,10 +491,15 @@ class FarmPathogenModel(Model):
         self.agents_added += 1
         return animal
 
-    def get_animals(self):
+    def get_animals(self, infected=False):
+        """Get all animals into a list"""
+
         x=[]
         for f in self.grid.get_all_cell_contents():
-            x.extend(f.animals)
+            if infected == True:
+                x.extend(f.get_infected())
+            else:
+                x.extend(f.animals)
         return x
 
     def get_herds_data(self):
@@ -496,7 +507,6 @@ class FarmPathogenModel(Model):
 
         res=[]
         for f in self.grid.get_all_cell_contents():
-        #for f in self.get_farms():
             animals = f.animal_ids()
             res.append([f.unique_id,f.loc_type,f.herd_class,len(f.animals),len(f.get_infected()),#f.get_strains(),animals
                         f.moves])
@@ -510,20 +520,29 @@ class FarmPathogenModel(Model):
 
         agent_state = self.datacollector.get_agent_vars_dataframe()
         X = pd.pivot_table(agent_state.reset_index(),index='Step',columns='State',aggfunc=np.size,fill_value=0)
-        labels = ['Susceptible','Infected','Removed']
+        labels = ['Susceptible','Infected','Immune']
         X.columns = labels[:len(X.columns)]
         return X
+
+    def get_animal_data(self, infected=False):
+        """Data for all animals"""
+
+        t=self.schedule.time
+        x=[]
+        animals = self.get_animals(infected)
+        for a in animals:
+            if a.strain!=None:
+                s=a.strain.name
+            else:
+                s=None
+            x.append([a.unique_id,a.species,a.state,s,a.infection_start,t-a.infection_start,a.location,len(a.moves)])
+        df = pd.DataFrame(x,columns=['id','species','state','strain','inf_start','inf_time','herd','moves'])
+        return df
 
     def get_infected_data(self):
         """Data for all infected animals"""
 
-        t=self.schedule.time
-        x=[]
-        for f in self.grid.get_all_cell_contents():
-            for a in f.get_infected():
-                x.append([a.unique_id,a.species,a.strain.name,a.infection_start,t-a.infection_start,a.location,len(a.moves)])
-        df = pd.DataFrame(x,columns=['id','species','strain','inf_start','inf_time','herd','moves'])
-        return df
+        return self.get_animal_data(infected=True)
 
     def get_sequences(self):
         """Get seqs for all circulating strains"""

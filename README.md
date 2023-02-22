@@ -22,7 +22,7 @@ Times are given in days since each step is a day.
 
 There is a panel dashboard for experimenting with model. It can be run by executing the `dashboard.py` file.
 
-<img align="left" src=img/dash_scr.png width=450px>
+<img align="left" src=img/dash_scr.png width=600px>
 
 ## Refs
 
