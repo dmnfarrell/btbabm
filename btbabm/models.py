@@ -394,7 +394,7 @@ class FarmPathogenModel(Model):
             self.grid = grid_from_spatial_graph(self, graph)
             self.G = graph
         else:
-            self.G = utils.create_graph(graph_type, graph_seed, total)
+            self.G,pos = utils.create_graph(graph_type, graph_seed, total)
             self.grid = NetworkGrid(self.G)
 
             #add some setts first

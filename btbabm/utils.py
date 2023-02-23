@@ -65,7 +65,9 @@ def create_closest_n_graph(n, num_closest_nodes):
     return G
 
 def create_graph(graph_type, graph_seed, size=10):
+    """Predefined graphs"""
 
+    pos=None
     if graph_type == 'erdos_renyi':
         G = nx.erdos_renyi_graph(n=size, p=0.2, seed=graph_seed)
     elif graph_type == 'barabasi_albert':
@@ -76,9 +78,17 @@ def create_graph(graph_type, graph_seed, size=10):
         G = nx.powerlaw_cluster_graph(n=size, m=3, p=0.5, seed=graph_seed)
     elif graph_type == 'random_geometric':
         G = nx.random_geometric_graph(n=size, p=0.2, seed=graph_seed)
-    elif 'custom':
-        G = create_closest_n_graph(size,3)
-    return G
+    return G, pos
+
+def create_herd_sett_graph(n=20):
+    """Custom herd/sett graph with spatial positions"""
+
+    gdf = random_geodataframe(n)
+    G,pos = delaunay_pysal(gdf, 'ID', attrs=['loc_type'])
+    #add more edges for herds
+    new_edges = add_random_edges(G,4)
+    G.add_edges_from(new_edges)
+    return G,pos
 
 def random_points(n):
     """Random points"""
@@ -170,7 +180,7 @@ def add_random_edges(G, new_connections=1):
             #if random.random() < p_new_connection:
             for new in random.sample(unconnected,new_connections):
                 #new = random.choice(unconnected)
-                if new == node or loctypes[new] == 'sett':                
+                if new == node or loctypes[new] == 'sett':
                     continue
                 G.add_edge(node, new)
                 #print ("\tnew edge:\t {} -- {}".format(node, new))
