@@ -20,6 +20,8 @@ from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO, AlignIO
 import json
 import toytree
+import geopandas as gpd
+from shapely.geometry import Point,MultiPoint,MultiPolygon
 
 strain_names = string.ascii_letters[:10].upper()
 strain_cmap = ({c:random_color(seed=1) for c in strain_names})
@@ -42,6 +44,7 @@ def random_hex_color():
     return c
 
 def create_closest_n_graph(n, num_closest_nodes):
+
     nodes = [i for i in range(n)]
     G = nx.Graph()
     G.add_nodes_from(nodes)
@@ -61,27 +64,123 @@ def create_closest_n_graph(n, num_closest_nodes):
             G.add_edge(node, closest_node)
     return G
 
-def draw_tree(filename,df=None,col=None,width=500,**kwargs):
+def create_graph(graph_type, graph_seed, size=10):
 
-    tre = toytree.tree(filename)
-    if df is not None:
-        cmap = ({c:random_hex_color() for c in df[col].unique()})
-        df['color'] = df[col].apply(lambda x: cmap[x])
-        idx=tre.get_tip_labels()
-        df=df.loc[idx]
-        tip_colors = list(df.color)
-        node_sizes=[0 if i else 6 for i in tre.get_node_values(None, 1, 0)]
-        node_colors = [cmap[df.loc[n][col]] if n in df.index else 'black' for n in tre.get_node_values('name', True, True)]
-    else:
-        tip_colors = None
-        node_colors = None
-        node_sizes = None
+    if graph_type == 'erdos_renyi':
+        G = nx.erdos_renyi_graph(n=size, p=0.2, seed=graph_seed)
+    elif graph_type == 'barabasi_albert':
+        G = nx.barabasi_albert_graph(n=size, m=3, seed=graph_seed)
+    elif graph_type == 'watts_strogatz':
+        G = nx.watts_strogatz_graph(n=size, k=4, p=0.1, seed=graph_seed)
+    elif graph_type == 'powerlaw_cluster':
+        G = nx.powerlaw_cluster_graph(n=size, m=3, p=0.5, seed=graph_seed)
+    elif graph_type == 'random_geometric':
+        G = nx.random_geometric_graph(n=size, p=0.2, seed=graph_seed)
+    elif 'custom':
+        G = create_closest_n_graph(size,3)
+    return G
 
-    canvas,axes,mark = tre.draw(scalebar=True,edge_widths=.5,height=600,width=width,
-                                tip_labels_colors=tip_colors,node_colors=node_colors,node_sizes=node_sizes,**kwargs)
-    return canvas
+def random_points(n):
+    """Random points"""
 
-def plot_grid(model,ax,colorby='loc_type', ns='herd_size', cmap='Blues', title='', **kwargs):
+    points = []
+    bounds = [10,10,100,100]
+    minx, miny, maxx, maxy = bounds
+    x = np.random.uniform( minx, maxx, n)
+    y = np.random.uniform( miny, maxy, n)
+    return x, y
+
+def random_geodataframe(n):
+    """Random geodataframe"""
+
+    x,y = random_points(n)
+    df = pd.DataFrame()
+    df['points'] = list(zip(x,y))
+    df['points'] = df['points'].apply(Point)
+    gdf = gpd.GeoDataFrame(df, geometry='points')
+    gdf['ID'] = range(n)
+    gdf['loc_type'] = np.random.choice(['herd','sett'], n, p=[0.8,0.2])
+    return gdf
+
+def gdf_to_distgraph(gdf):
+    """Convert geodataframe to graph"""
+
+    from libpysal import weights, examples
+    coordinates = np.column_stack((gdf.geometry.x, gdf.geometry.y))
+    dist = weights.DistanceBand.from_array(coordinates, threshold=50000)
+    knn3 = weights.KNN.from_dataframe(gdf, k=3)
+    G = knn3.to_networkx()
+    pos = dict(zip(G.nodes, coordinates))
+    return G,pos
+
+def delaunay_pysal(gdf, key='SeqID', attrs=[]):
+    """Get delaunay graph from gdf of points using libpysal"""
+
+    from libpysal import weights, examples
+    from libpysal.cg import voronoi_frames
+
+    coordinates = np.column_stack((gdf.geometry.x, gdf.geometry.y))
+    distances = gdf.geometry.apply(lambda x: gdf.distance(x))
+    #print (distances)
+    cells, generators = voronoi_frames(coordinates, clip="extent")
+    delaunay = weights.Rook.from_dataframe(cells)
+    G = delaunay.to_networkx()
+    #rename nodes
+    mapping = dict(zip(G.nodes,gdf[key]))
+    #print (mapping)
+    G = nx.relabel_nodes(G, mapping)
+    pos = dict(zip(G.nodes, coordinates))
+    nx.set_node_attributes(G, pos, 'pos')
+    #print (positions)
+    for col in attrs:
+        vals = dict(zip(G.nodes, gdf[col]))
+        nx.set_node_attributes(G, vals, col)
+    #add lengths
+    lengths={}
+    for edge in G.edges():
+        a,b = edge
+        dist = int(math.sqrt(sum([(a - b) ** 2 for a, b in zip(pos[a],pos[b])])))
+        lengths[edge] = dist
+    nx.set_edge_attributes(G, lengths, 'length')
+
+    #add names to nodes - not needed?
+    for i, node in enumerate(G.nodes()):
+        G.nodes[node]['label'] = gdf.iloc[i][key]
+
+    return G, pos
+
+def add_random_edges(G, new_connections=1):
+    """
+      Add new connections to random other nodes, up to new_connections
+      https://stackoverflow.com/questions/42591549/add-and-delete-a-random-edge-in-networkx
+    """
+    new_edges = []
+
+    loctypes = nx.get_node_attributes(G,'loc_type')
+    for node in G.nodes():
+        if loctypes[node] == 'sett':
+            continue
+        # find the other nodes this one is connected to
+        connected = [to for (fr, to) in G.edges(node)]
+        # and find the remainder of nodes, which are candidates for new edges
+        unconnected = [n for n in G.nodes() if not n in connected]
+
+        # probabilistically add a random edge
+        if len(unconnected): # only try if new edge is possible
+            #if random.random() < p_new_connection:
+            for new in random.sample(unconnected,new_connections):
+                #new = random.choice(unconnected)
+                if new == node or loctypes[new] == 'sett':                
+                    continue
+                G.add_edge(node, new)
+                #print ("\tnew edge:\t {} -- {}".format(node, new))
+                new_edges.append( (node, new) )
+                # book-keeping, in case both add and remove done in same cycle
+                unconnected.remove(new)
+                connected.append(new)
+    return new_edges
+
+def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size', cmap='Blues', title='', **kwargs):
     """Custom draw method for model graph network"""
 
     from matplotlib.colors import ListedColormap, LinearSegmentedColormap
@@ -117,7 +216,8 @@ def plot_grid(model,ax,colorby='loc_type', ns='herd_size', cmap='Blues', title='
         sizes=50
 
     ec = ['red' if n.loc_type=='sett' else 'black' for n in model.grid.get_all_cell_contents()]
-    pos = nx.kamada_kawai_layout(graph)
+    if pos == None:
+        pos = nx.kamada_kawai_layout(graph)
     nx.draw(graph, pos, width=.1, node_color=node_colors,node_size=sizes, cmap=cmap,
             edgecolors=ec,linewidths=0.6,alpha=0.8,
             font_size=8,ax=ax, **kwargs)
@@ -147,3 +247,23 @@ def plot_by_species(model):
     #print (x)
     ax=x.plot(kind='bar')
     return ax.get_figure()
+
+def draw_tree(filename,df=None,col=None,width=500,**kwargs):
+
+    tre = toytree.tree(filename)
+    if df is not None:
+        cmap = ({c:random_hex_color() for c in df[col].unique()})
+        df['color'] = df[col].apply(lambda x: cmap[x])
+        idx=tre.get_tip_labels()
+        df=df.loc[idx]
+        tip_colors = list(df.color)
+        node_sizes=[0 if i else 6 for i in tre.get_node_values(None, 1, 0)]
+        node_colors = [cmap[df.loc[n][col]] if n in df.index else 'black' for n in tre.get_node_values('name', True, True)]
+    else:
+        tip_colors = None
+        node_colors = None
+        node_sizes = None
+
+    canvas,axes,mark = tre.draw(scalebar=True,edge_widths=.5,height=600,width=width,
+                                tip_labels_colors=tip_colors,node_colors=node_colors,node_sizes=node_sizes,**kwargs)
+    return canvas

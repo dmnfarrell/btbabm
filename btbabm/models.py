@@ -41,6 +41,25 @@ herd_class - type of herd
 strain_names = string.ascii_letters[:10].upper()
 HERD_CLASSES = ['beef','dairy','beef suckler','fattening']
 
+def grid_from_spatial_graph(model, G):
+    """
+    Great the networkgrid from a predefined graph,
+    used so we can convert from spatial data.
+    """
+
+    grid = NetworkGrid(G)
+    locs = nx.get_node_attributes(G, 'loc_type')
+    for node in G.nodes():
+        #print (node, locs[node])
+        nodetype= locs[node]
+        if nodetype == 'sett':
+            sett = Sett(node, model)
+            grid.place_agent(sett, node)
+        elif nodetype == 'herd':
+            f = Farm(node, model)
+            grid.place_agent(f, node)
+    return grid
+
 class State(enum.IntEnum):
     SUSCEPTIBLE = 0
     INFECTED = 1
@@ -336,12 +355,12 @@ class Cow(Animal):
     def __repr__(self):
         return 'cow:%s (herd %s)' %(self.unique_id,self.location)
 
-
 class FarmPathogenModel(Model):
     def __init__(self, F, C, S, mean_stay_time=100, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
                  infected_start=5, seq_length=100, #cull_rate=None,
-                 graph_type='custom', graph_seed=None, callback=None):
+                 graph=None, graph_type='custom', graph_seed=None,
+                 callback=None):
 
         self.num_farms = F
         self.num_setts = S
@@ -370,31 +389,25 @@ class FarmPathogenModel(Model):
 
         self.callback = callback
 
-        if graph_type == 'erdos_renyi':
-            self.G = nx.erdos_renyi_graph(n=total, p=0.2, seed=graph_seed)
-        elif graph_type == 'barabasi_albert':
-            self.G = nx.barabasi_albert_graph(n=total, m=3, seed=graph_seed)
-        elif graph_type == 'watts_strogatz':
-            self.G = nx.watts_strogatz_graph(n=total, k=4, p=0.1, seed=graph_seed)
-        elif graph_type == 'powerlaw_cluster':
-            self.G = nx.powerlaw_cluster_graph(n=total, m=3, p=0.5, seed=graph_seed)
-        elif graph_type == 'random_geometric':
-            self.G = nx.random_geometric_graph(n=total, p=0.2, seed=graph_seed)
-        elif 'custom':
-            self.G = utils.create_closest_n_graph(total,3)
-        self.grid = NetworkGrid(self.G)
+        if graph is not None:
+            #creates from predefined graph
+            self.grid = grid_from_spatial_graph(self, graph)
+            self.G = graph
+        else:
+            self.G = utils.create_graph(graph_type, graph_seed, total)
+            self.grid = NetworkGrid(self.G)
 
-        #add some setts first
-        added=[]
-        for node in random.sample(list(self.G.nodes()), self.num_setts):
-            sett = Sett(node, self)
-            self.grid.place_agent(sett, node)
-            added.append(node)
+            #add some setts first
+            added=[]
+            for node in random.sample(list(self.G.nodes()), self.num_setts):
+                sett = Sett(node, self)
+                self.grid.place_agent(sett, node)
+                added.append(node)
 
-        for node in self.G.nodes():
-            if node in added: continue
-            farm = Farm(node, self)
-            self.grid.place_agent(farm, node)
+            for node in self.G.nodes():
+                if node in added: continue
+                farm = Farm(node, self)
+                self.grid.place_agent(farm, node)
 
         #add cows randomly
         infectedcount=0
