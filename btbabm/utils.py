@@ -27,6 +27,17 @@ strain_names = string.ascii_letters[:10].upper()
 strain_cmap = ({c:random_color(seed=1) for c in strain_names})
 strain_cmap[None] = 'gray'
 
+def get_short_uid():
+    import hashlib
+    import base64
+    # Generate a unique hash value using the current time and random bytes
+    hash_value = hashlib.sha256(f"{time.time()}:{os.urandom(16)}".encode()).digest()
+    # Encode the hash value using base64 without padding characters
+    encoded_value = base64.b64encode(hash_value, altchars=b"-_").rstrip(b"=")
+    # Convert the bytes to a string
+    uid = encoded_value.decode("ascii")[:6]
+    return uid
+
 def random_sequence(length=50):
     seq=''
     for count in range(length):
@@ -80,10 +91,11 @@ def create_graph(graph_type, graph_seed, size=10):
         G = nx.random_geometric_graph(n=size, p=0.2, seed=graph_seed)
     return G, pos
 
-def create_herd_sett_graph(n=20):
+def create_herd_sett_graph(farms=20,setts=5):
     """Custom herd/sett graph with spatial positions"""
 
-    gdf = random_geodataframe(n)
+    n=farms+setts
+    gdf = random_geodataframe(n,ratio=setts/n)
     G,pos = delaunay_pysal(gdf, 'ID', attrs=['loc_type'])
     #add more edges for herds
     new_edges = add_random_edges(G,4)
@@ -100,7 +112,7 @@ def random_points(n):
     y = np.random.uniform( miny, maxy, n)
     return x, y
 
-def random_geodataframe(n):
+def random_geodataframe(n, ratio=0.2):
     """Random geodataframe"""
 
     x,y = random_points(n)
@@ -109,7 +121,7 @@ def random_geodataframe(n):
     df['points'] = df['points'].apply(Point)
     gdf = gpd.GeoDataFrame(df, geometry='points')
     gdf['ID'] = range(n)
-    gdf['loc_type'] = np.random.choice(['herd','sett'], n, p=[0.8,0.2])
+    gdf['loc_type'] = np.random.choice(['herd','sett'], n, p=[1-ratio,ratio])
     return gdf
 
 def gdf_to_distgraph(gdf):
@@ -217,9 +229,9 @@ def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size', cmap='Blues'
     elif colorby == 'perc_infected':
         node_colors = [len(n.get_infected())/len(n)*200 for n in model.grid.get_all_cell_contents()]
     if ns == 'herd_size':
-        sizes = [len(n)*20 for n in model.grid.get_all_cell_contents()]
+        sizes = [len(n)*10 for n in model.grid.get_all_cell_contents()]
     elif ns == 'num_infected':
-        sizes = [len(n.get_infected())*20 for n in model.grid.get_all_cell_contents()]
+        sizes = [len(n.get_infected())*10 for n in model.grid.get_all_cell_contents()]
     elif ns == 'perc_infected':
         sizes = [len(n.get_infected())/len(n)*200 for n in model.grid.get_all_cell_contents()]
     else:

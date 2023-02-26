@@ -38,7 +38,7 @@ seq_length - sequence length
 herd_class - type of herd
 '''
 
-strain_names = string.ascii_letters[:10].upper()
+strain_names = string.ascii_letters[:5].upper()
 HERD_CLASSES = ['beef','dairy','beef suckler','fattening']
 
 def grid_from_spatial_graph(model, G):
@@ -167,8 +167,8 @@ class Sett(Location):
 class Animal(object):
     """Animal agent that moves from farm to farm """
 
-    def __init__(self, unique_id, model):
-        self.unique_id = unique_id
+    def __init__(self, model):
+        self.unique_id = utils.get_short_uid()
         self.location = None
         self.state = State.SUSCEPTIBLE
         self.strain = None
@@ -187,14 +187,16 @@ class Animal(object):
             self.strain = strain.copy()
             strain.mutate()
             self.infection_start = self.model.schedule.time
+            if self.model.callback != None:
+                self.model.callback('infected %s time:%s' %(self,self.model.schedule.time))
             return True
         return False
 
 class Badger(Animal):
     """Animal agent that acts as wildlife reservoir"""
 
-    def __init__(self, unique_id, model):
-        super().__init__(unique_id, model)
+    def __init__(self, model):
+        super().__init__(model)
         self.species = 'badger'
         self.time_last_move = 0
         self.death_age = abs(int(random.normalvariate(8*365,1000)))
@@ -237,15 +239,13 @@ class Badger(Animal):
                     for animal in loc.animals:
                         if animal.state == State.SUSCEPTIBLE:
                             animal.infect(self.strain, self.model.bctrans)
-                            if animal.state == State.INFECTED:
-                                if self.model.callback != None:
-                                    self.model.callback('badger infected cow')
 
                 elif self.state == State.SUSCEPTIBLE:
-                    #infect badger?
+                    #infect badger
                     for animal in loc.animals:
                         if animal.state == State.INFECTED:
                             self.infect(animal.strain, self.model.bctrans)
+
             self.time_last_move = t
         return
 
@@ -265,8 +265,8 @@ class Badger(Animal):
 class Cow(Animal):
     """Animal agent that moves from farm to farm """
 
-    def __init__(self, unique_id, model):
-        super().__init__(unique_id, model)
+    def __init__(self, model):
+        super().__init__(model)
         self.species = 'cow'
         #stay time at current farm, updated when moved
         self.stay_time = abs(int(random.normalvariate(model.mean_stay_time,100)))
@@ -356,10 +356,10 @@ class Cow(Animal):
         return 'cow:%s (herd %s)' %(self.unique_id,self.location)
 
 class FarmPathogenModel(Model):
-    def __init__(self, F, C, S, mean_stay_time=100, mean_inf_time=60, mean_latency_time=100,
+    def __init__(self, F=100, C=10, S=0, mean_stay_time=100, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
                  infected_start=5, seq_length=100, #cull_rate=None,
-                 graph=None, graph_type='custom', graph_seed=None,
+                 graph_type='default', graph_seed=None,
                  callback=None):
 
         self.num_farms = F
@@ -389,14 +389,17 @@ class FarmPathogenModel(Model):
 
         self.callback = callback
 
-        if graph is not None:
-            #creates from predefined graph
+        #if graph is not None:
+        if graph_type == 'default':
+            #creates grid from custom graph
+            graph,pos = utils.create_herd_sett_graph(F,S)
             self.grid = grid_from_spatial_graph(self, graph)
             self.G = graph
+            self.pos=pos
         else:
             self.G,pos = utils.create_graph(graph_type, graph_seed, total)
             self.grid = NetworkGrid(self.G)
-
+            self.pos=None
             #add some setts first
             added=[]
             for node in random.sample(list(self.G.nodes()), self.num_setts):
@@ -412,7 +415,7 @@ class FarmPathogenModel(Model):
         #add cows randomly
         infectedcount=0
         for i in range(self.num_cows):
-            animal = self.add_animal(i)
+            animal = self.add_animal()
             if infectedcount <= infected_start:
                 animal.state = State.INFECTED
                 s = random.choice(strain_names)
@@ -422,7 +425,7 @@ class FarmPathogenModel(Model):
         #add badgers randomly
         l = self.agents_added+1
         for i in range(l,l+self.num_badgers):
-            animal = self.add_badger(i)
+            animal = self.add_badger()
             if animal == None:
                 continue
             if random.choice(range(5)) == 1:
@@ -463,29 +466,23 @@ class FarmPathogenModel(Model):
         x=self.grid.get_all_cell_contents()
         return [i for i in x if type(i) is Sett]
 
-    def add_animal(self, uid=None, farm=None):
+    def add_animal(self, farm=None):
         """Add cow. If no farm given, add randomly"""
 
-        if uid==None:
-            uid = self.agents_added+1
-
-        animal = Cow(uid, model=self)
+        animal = Cow(model=self)
         if farm == None:
             farm = random.choice(self.get_farms())
-        #print (farm)
+
         animal.location = farm.unique_id
         farm.animals.append(animal)
         self.schedule.add(animal)
         self.agents_added += 1
         return animal
 
-    def add_badger(self, uid=None, sett=None):
+    def add_badger(self, sett=None):
         """Add badger"""
 
-        if uid==None:
-            uid = self.agents_added+1
-
-        animal = Badger(uid, model=self)
+        animal = Badger(model=self)
         if sett == None:
             sett = random.choice(self.get_setts())
         if len(sett.animals)>self.max_sett_size:
