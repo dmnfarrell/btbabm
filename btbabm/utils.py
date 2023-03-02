@@ -23,11 +23,20 @@ import toytree
 import geopandas as gpd
 from shapely.geometry import Point,MultiPoint,MultiPolygon
 
+def random_color(seed=None):
+    if seed != None:
+        random.seed = seed
+    return tuple([np.random.random_sample() for i in range(3)])
+
 strain_names = string.ascii_letters[:10].upper()
-strain_cmap = ({c:random_color(seed=1) for c in strain_names})
+#strain_cmap = ({c:random_color(seed=1) for c in strain_names})
+strain_cmap = {'A':'red','B':'blue','C':'green','D':'brown',
+                'E':'orange','F':'pink','G':'yellow','H':'cyan'}
 strain_cmap[None] = 'gray'
 
-def get_short_uid():
+def get_short_uid(n=10):
+    """Short uids up to n chars long"""
+
     import hashlib
     import base64
     # Generate a unique hash value using the current time and random bytes
@@ -35,7 +44,7 @@ def get_short_uid():
     # Encode the hash value using base64 without padding characters
     encoded_value = base64.b64encode(hash_value, altchars=b"-_").rstrip(b"=")
     # Convert the bytes to a string
-    uid = encoded_value.decode("ascii")[:6]
+    uid = encoded_value.decode("ascii")[:n]
     return uid
 
 def random_sequence(length=50):
@@ -43,11 +52,6 @@ def random_sequence(length=50):
     for count in range(length):
         seq += random.choice("CGTA")
     return seq
-
-def random_color(seed=None):
-    if seed != None:
-        random.seed = seed
-    return tuple([np.random.random_sample() for i in range(3)])
 
 def random_hex_color():
     r = lambda: random.randint(0,255)
@@ -95,7 +99,7 @@ def create_herd_sett_graph(farms=20,setts=5):
     """Custom herd/sett graph with spatial positions"""
 
     n=farms+setts
-    gdf = random_geodataframe(n,ratio=setts/n)
+    gdf = random_herds_setts(n,ratio=setts/n)
     G,pos = delaunay_pysal(gdf, 'ID', attrs=['loc_type'])
     #add more edges for herds
     new_edges = add_random_edges(G,4)
@@ -112,15 +116,19 @@ def random_points(n):
     y = np.random.uniform( miny, maxy, n)
     return x, y
 
-def random_geodataframe(n, ratio=0.2):
-    """Random geodataframe"""
+def random_geodataframe(n):
+    """Random geodataframe of points"""
 
     x,y = random_points(n)
     df = pd.DataFrame()
-    df['points'] = list(zip(x,y))
-    df['points'] = df['points'].apply(Point)
-    gdf = gpd.GeoDataFrame(df, geometry='points')
+    df['geometry'] = list(zip(x,y))
+    df['geometry'] = df['geometry'].apply(Point)
+    gdf = gpd.GeoDataFrame(df, geometry='geometry')
     gdf['ID'] = range(n)
+    return gdf
+
+def random_herds_setts(n, ratio=0.2):
+    gdf = random_geodataframe(n)
     gdf['loc_type'] = np.random.choice(['herd','sett'], n, p=[1-ratio,ratio])
     return gdf
 
@@ -202,6 +210,63 @@ def add_random_edges(G, new_connections=1):
                 connected.append(new)
     return new_edges
 
+def get_largest_poly(x):
+    if type(x) is MultiPolygon:
+        return max(x.geoms, key=lambda a: a.area)
+    else:
+        return x
+
+def generate_land_parcels(frag=50,herds=15,frac=0.5,seed=None):
+    """
+    Simulate land parcels with fragmentation.
+    Args:
+        frag: number of points to make polyons
+        herds: number of farms
+        frac: fraction of fragments that are empty
+    """
+
+    from shapely.geometry import Point,MultiPoint,MultiPolygon
+    from libpysal import weights, examples
+    from libpysal.cg import voronoi_frames
+    from sklearn.cluster import KMeans
+
+    n = frag
+    k = herds
+    if seed != None:
+        np.random.seed(seed)
+    x,y = np.random.randint(1,100,n),np.random.randint(1,100,n)
+    coords = np.column_stack((x, y))
+    cells, generators = voronoi_frames(coords, clip="extent")
+    centroids = cells.geometry.centroid
+    #cluster parcels into 'herds'
+    kmeans = KMeans(n_clusters=k).fit(coords)
+    labels = kmeans.labels_
+    #randomise some labels to make fragmentation
+    cells['cluster'] = pashuffle(labels,30)
+    #remove a few cells randomly
+    cells = cells.sample(frac=frac, random_state=seed)
+    poly=[]
+    data = {'cluster':[]}
+    for c,g in cells.groupby('cluster'):
+        poly.append(MultiPolygon(list(g.geometry)))
+        data['cluster'].append(c)
+
+    farms = gpd.GeoDataFrame(data=data,geometry=poly)
+    #merge contiguous fragments of same herd
+    farms = farms.dissolve(by='cluster').reset_index()
+    farms['herd'] = farms.apply(lambda x: get_short_uid(4),1)
+    return farms
+
+def pashuffle(data, perc=10, seed=None):
+    """Partial shuffle list"""
+
+    #random.seed(seed)
+    for index, letter in enumerate(data):
+        if random.randrange(0, 100) < perc/2:
+            new_index = random.randrange(0, len(data))
+            data[index], data[new_index] = data[new_index], data[index]
+    return data
+
 def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size', cmap='Blues', title='', **kwargs):
     """Custom draw method for model graph network"""
 
@@ -241,11 +306,12 @@ def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size', cmap='Blues'
     if pos == None:
         pos = nx.kamada_kawai_layout(graph)
     nx.draw(graph, pos, width=.1, node_color=node_colors,node_size=sizes, cmap=cmap,
-            edgecolors=ec,linewidths=0.6,alpha=0.8,
+            edgecolors=ec,linewidths=0.8,alpha=0.8,
             font_size=8,ax=ax, **kwargs)
     #ax.legend()
     ax.set_title(title,fontsize=20)
     #plt.colorbar(ax)
+    plt.tight_layout()
     return
 
 def plot_inf_data(model):
@@ -274,7 +340,8 @@ def draw_tree(filename,df=None,col=None,width=500,**kwargs):
 
     tre = toytree.tree(filename)
     if df is not None:
-        cmap = ({c:random_hex_color() for c in df[col].unique()})
+        #cmap = ({c:random_hex_color() for c in df[col].unique()})
+        cmap = strain_cmap
         df['color'] = df[col].apply(lambda x: cmap[x])
         idx=tre.get_tip_labels()
         df=df.loc[idx]
@@ -289,3 +356,12 @@ def draw_tree(filename,df=None,col=None,width=500,**kwargs):
     canvas,axes,mark = tre.draw(scalebar=True,edge_widths=.5,height=600,width=width,
                                 tip_labels_colors=tip_colors,node_colors=node_colors,node_sizes=node_sizes,**kwargs)
     return canvas
+
+def run_fasttree(infile, outpath, bootstraps=100):
+    """Run fasttree"""
+
+    fc = 'fasttree'
+    out = os.path.join(outpath,'tree.newick')
+    cmd = '{fc} -nt {i} > {o}'.format(fc=fc,b=bootstraps,i=infile,o=out)
+    tmp = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
+    return out

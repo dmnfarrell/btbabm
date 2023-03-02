@@ -178,6 +178,38 @@ class Animal(object):
         #self.farm = None
         return
 
+    def contact(self):
+        """
+        Contact a neighbouring node. Only farms with nearby generate_land_parcels
+        should have connected nodes. Any animal can contact one in the other location.
+        """
+
+        t = self.model.schedule.time
+        #if t-self.time_last_move<10:
+        #    return
+        curr = self.location
+        G = self.model.G
+        neighbors = G.neighbors(curr)
+        nn = list(neighbors)
+        if len(nn) > 0:
+            new = random.choice(nn)
+            loc = self.model.get_node(new)
+            if self.state == State.INFECTED:
+                if type(loc) is Farm:
+                    #interact with random
+                    for animal in loc.animals:
+                        if animal.state == State.SUSCEPTIBLE:
+                            animal.infect(self.strain, self.model.bctrans)
+
+                elif self.state == State.SUSCEPTIBLE:
+                    #infect badger
+                    for animal in loc.animals:
+                        if animal.state == State.INFECTED:
+                            self.infect(animal.strain, self.model.bctrans)
+
+            self.time_last_move = t
+        return
+
     def infect(self, strain, ptrans):
         """Infect the animal with some probability"""
 
@@ -200,53 +232,22 @@ class Badger(Animal):
         self.species = 'badger'
         self.time_last_move = 0
         self.death_age = abs(int(random.normalvariate(8*365,1000)))
-        self.latency_period = abs(int(random.normalvariate(300,100)))
-        self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
+        self.latency_period = abs(int(random.normalvariate(200,100)))
+        self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time*2,100)))
         self.moves = []
 
     def step(self):
         """Do step"""
 
         self.age +=1
-        self.move()
+        self.contact()
         curr = self.location
         sett = self.model.get_node(curr)
         if self.state == State.SUSCEPTIBLE:
             for animal in sett.get_infected():
                 if animal.state == State.INFECTED:
                     self.infect(animal.strain, self.model.bctrans)
-
         self.infection_status()
-        return
-
-    def move(self):
-        """Move to a neighbouring farm"""
-
-        t = self.model.schedule.time
-        if t-self.time_last_move<10:
-            return
-        curr = self.location
-        current_sett = self.model.get_node(curr)
-        G = self.model.G
-        neighbors = G.neighbors(curr)
-        nn = list(neighbors)
-        if len(nn) > 0:
-            new = random.choice(nn)
-            loc = self.model.get_node(new)
-            if self.state == State.INFECTED:
-                if type(loc) is Farm:
-                    #interact with random cows
-                    for animal in loc.animals:
-                        if animal.state == State.SUSCEPTIBLE:
-                            animal.infect(self.strain, self.model.bctrans)
-
-                elif self.state == State.SUSCEPTIBLE:
-                    #infect badger
-                    for animal in loc.animals:
-                        if animal.state == State.INFECTED:
-                            self.infect(animal.strain, self.model.bctrans)
-
-            self.time_last_move = t
         return
 
     def infection_status(self):
@@ -275,7 +276,8 @@ class Cow(Animal):
         #time after infection to death
         self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
         #latency period when not infectious
-        self.latency_period = abs(int(random.normalvariate(model.mean_latency_time,100)))
+        #self.latency_period = abs(int(random.normalvariate(model.mean_latency_time,100)))
+        self.latency_period = random.randint(1,model.mean_latency_time)
         #time spent at current farm
         self.time_at_farm = 0
         self.moves = []
@@ -283,15 +285,16 @@ class Cow(Animal):
 
     def step(self):
         """
-        Step in simulation
-        Animal can move, be infected, die or nothing
+        Step in simulation.
+        Contact with neighbors or moves to anywhere.
+        Animal can be infected, die or nothing.
         """
 
         self.time_at_farm += 1
         self.age +=1
-        #print (self.model.schedule.time, self.time_at_farm,self.stay_time)
-        if self.time_at_farm >= self.stay_time:
-            self.move()
+        #if self.time_at_farm >= self.stay_time:
+        #    self.move()
+        self.contact()
         curr = self.location
         #self.model.callback(model.grid.get_all_cell_contents())
         farm = self.model.get_node(curr)
@@ -306,19 +309,16 @@ class Cow(Animal):
         return
 
     def move(self):
-        """Move to another farm"""
+        """Move to another farm anywhere on network. Can include moves only
+        to similar type farms etc."""
 
+        print ('move')
         curr = self.location
         current_farm = self.model.get_node(curr)
         G = self.model.G
-        neighbors = G.neighbors(curr)
-        nn = list(neighbors)
 
-        if len(nn) > 0:
-            new = random.choice(nn)
-            next_farm = self.model.get_node(new)
-            if not type(next_farm) is Farm:
-                return
+        #get random farm
+        #next_farm = self.model.get ...
 
         current_farm.animals.remove(self)
         next_farm.animals.append(self)
@@ -359,7 +359,7 @@ class FarmPathogenModel(Model):
     def __init__(self, F=100, C=10, S=0, mean_stay_time=100, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
                  infected_start=5, seq_length=100, #cull_rate=None,
-                 graph_type='default', graph_seed=None,
+                 graph_type='watts_strogatz', graph_seed=None,
                  callback=None):
 
         self.num_farms = F
@@ -557,16 +557,6 @@ class FarmPathogenModel(Model):
 
         return self.get_animal_data(infected=True)
 
-    def get_sequences(self):
-        """Get seqs for all circulating strains"""
-
-        seqs = []
-        for node in self.grid.get_all_cell_contents():
-            for a in node.get_infected():
-                s = a.strain
-                seqs.append(SeqRecord(Seq(s.sequence),str(a.unique_id)))
-        return seqs
-
     def get_moves(self):
         """Return all moves"""
 
@@ -578,6 +568,16 @@ class FarmPathogenModel(Model):
                         res.append([a.unique_id]+m)
         return pd.DataFrame(res,columns=['id','start','end','time'])
 
+    def get_sequences(self):
+        """Get seqs for all circulating strains"""
+
+        seqs = []
+        for node in self.grid.get_all_cell_contents():
+            for a in node.get_infected():
+                s = a.strain
+                seqs.append(SeqRecord(Seq(s.sequence),str(a.unique_id)))
+        return seqs
+
     def make_phylogeny(self):
         """Phylogeny of sequences"""
 
@@ -586,8 +586,10 @@ class FarmPathogenModel(Model):
         infile = 'temp.fasta'
         SeqIO.write(seqs,infile,'fasta')
         try:
-            run_fasttree(infile, '.', bootstraps=50)
-        except:
+            utils.run_fasttree(infile, '.', bootstraps=50)
+        except Exception as e:
+            print ('fasttree error')
+            print(e)
             return
         ls = len(seqs[0])
         snipgenie.trees.convert_branch_lengths('tree.newick','tree.newick', ls)
