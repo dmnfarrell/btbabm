@@ -123,7 +123,7 @@ class Location(object):
 
     def get_strains(self):
         """Strain(s) on farm"""
-        return [a.strain.name for a in self.animals if a.strain!=None]
+        return [a.strain.name for a in self.get_infected() if a.strain!=None]
 
     def main_strain(self):
         """Main strain"""
@@ -174,6 +174,7 @@ class Animal(object):
         self.strain = None
         self.infection_start = 0
         self.age = 1
+        self.death_time = None
         self.model = model
         #self.farm = None
         return
@@ -219,8 +220,8 @@ class Animal(object):
             self.strain = strain.copy()
             strain.mutate()
             self.infection_start = self.model.schedule.time
-            if self.model.callback != None:
-                self.model.callback('infected %s time:%s' %(self,self.model.schedule.time))
+            #if self.model.callback != None:
+            #    self.model.callback('infected %s time:%s' %(self,self.model.schedule.time))
             return True
         return False
 
@@ -359,7 +360,7 @@ class FarmPathogenModel(Model):
     def __init__(self, F=100, C=10, S=0, mean_stay_time=100, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
                  infected_start=5, seq_length=100, #cull_rate=None,
-                 graph_type='watts_strogatz', graph_seed=None,
+                 graph_type='default', graph_seed=None,
                  callback=None):
 
         self.num_farms = F
@@ -385,6 +386,7 @@ class FarmPathogenModel(Model):
         self.year = 1
         self.deaths = 0
         self.agents_added = 0
+        self.removed = []
         total = self.num_farms + self.num_setts
 
         self.callback = callback
@@ -392,7 +394,7 @@ class FarmPathogenModel(Model):
         #if graph is not None:
         if graph_type == 'default':
             #creates grid from custom graph
-            graph,pos = utils.create_herd_sett_graph(F,S)
+            graph,pos = utils.create_herd_sett_graph(F,S,graph_seed)
             self.grid = grid_from_spatial_graph(self, graph)
             self.G = graph
             self.pos=pos
@@ -497,11 +499,14 @@ class FarmPathogenModel(Model):
     def remove_animal(self, animal):
         """Remove from model"""
 
+        t = self.schedule.time
         loc = self.get_node(animal.location)
         animal.state = State.REMOVED
+        animal.death_age = t
         self.schedule.remove(animal)
         loc.animals.remove(animal)
         self.deaths +=1
+        self.removed.append(animal)
         return
 
     def get_animals(self, infected=False):
@@ -537,19 +542,21 @@ class FarmPathogenModel(Model):
         X.columns = labels[:len(X.columns)]
         return X
 
-    def get_animal_data(self, infected=False):
+    def get_animal_data(self, infected=False, removed=False):
         """Data for all animals"""
 
         t=self.schedule.time
         x=[]
         animals = self.get_animals(infected)
+        if removed == True:
+            animals.extend(self.removed)
         for a in animals:
             if a.strain!=None:
                 s=a.strain.name
             else:
                 s=None
-            x.append([a.unique_id,a.species,a.state,s,a.infection_start,t-a.infection_start,a.location,len(a.moves)])
-        df = pd.DataFrame(x,columns=['id','species','state','strain','inf_start','inf_time','herd','moves'])
+            x.append([a.unique_id,a.species,a.state,s,a.infection_start,t-a.infection_start,a.death_age,a.location,len(a.moves)])
+        df = pd.DataFrame(x,columns=['id','species','state','strain','inf_start','inf_time','death_age','herd','moves'])
         return df
 
     def get_infected_data(self):
@@ -568,21 +575,33 @@ class FarmPathogenModel(Model):
                         res.append([a.unique_id]+m)
         return pd.DataFrame(res,columns=['id','start','end','time'])
 
-    def get_sequences(self):
-        """Get seqs for all circulating strains"""
+    def get_sequences(self, removed=False, redundant=True):
+        """Get strain sequences of infected"""
 
         seqs = []
-        for node in self.grid.get_all_cell_contents():
-            for a in node.get_infected():
-                s = a.strain
+        animals = self.get_animals(infected=True)
+        if removed == True:
+            animals.extend(self.removed)
+        for a in animals:
+            s = a.strain
+            if s != None:
                 seqs.append(SeqRecord(Seq(s.sequence),str(a.unique_id)))
-        return seqs
+        new = []
+        if redundant == False:
+            seen = set()
+            for record in seqs:
+                if record.seq not in seen:
+                    seen.add(record.seq)
+                    new.append(record)
+        else:
+            new = seqs
+        return new
 
-    def make_phylogeny(self):
+    def make_phylogeny(self, removed=False, redundant=True):
         """Phylogeny of sequences"""
 
         import snipgenie
-        seqs = self.get_sequences()
+        seqs = self.get_sequences(removed, redundant)
         infile = 'temp.fasta'
         SeqIO.write(seqs,infile,'fasta')
         try:
@@ -595,11 +614,11 @@ class FarmPathogenModel(Model):
         snipgenie.trees.convert_branch_lengths('tree.newick','tree.newick', ls)
         return seqs
 
-    def get_clades(model, newick=None):
+    def get_clades(model, newick=None, removed=False, redundant=True):
         """Get clades from newick tree"""
 
         if newick==None:
-            seqs = model.make_phylogeny()
+            seqs = model.make_phylogeny(removed, redundant)
             newick = 'tree.newick'
         import snipgenie
         cl = snipgenie.trees.get_clusters(newick)

@@ -30,8 +30,8 @@ def random_color(seed=None):
 
 strain_names = string.ascii_letters[:10].upper()
 #strain_cmap = ({c:random_color(seed=1) for c in strain_names})
-strain_cmap = {'A':'red','B':'blue','C':'green','D':'brown',
-                'E':'orange','F':'pink','G':'yellow','H':'cyan'}
+strain_cmap = {'A':'coral','B':'dodgerblue','C':'lightgreen','D':'mediumpurple',
+                'E':'orange','F':'pink','G':'gold','H':'cyan'}
 strain_cmap[None] = 'gray'
 
 def get_short_uid(n=10):
@@ -95,20 +95,22 @@ def create_graph(graph_type, graph_seed, size=10):
         G = nx.random_geometric_graph(n=size, p=0.2, seed=graph_seed)
     return G, pos
 
-def create_herd_sett_graph(farms=20,setts=5):
+def create_herd_sett_graph(farms=20,setts=5, seed=None):
     """Custom herd/sett graph with spatial positions"""
 
     n=farms+setts
-    gdf = random_herds_setts(n,ratio=setts/n)
+    gdf = random_herds_setts(n,ratio=setts/n, seed=seed)
     G,pos = delaunay_pysal(gdf, 'ID', attrs=['loc_type'])
     #add more edges for herds
-    new_edges = add_random_edges(G,4)
-    G.add_edges_from(new_edges)
+    #new_edges = add_random_edges(G,4)
+    #G.add_edges_from(new_edges)
     return G,pos
 
-def random_points(n):
+def random_points(n, seed=None):
     """Random points"""
 
+    if seed != None:
+        np.random.seed(seed)
     points = []
     bounds = [10,10,100,100]
     minx, miny, maxx, maxy = bounds
@@ -116,10 +118,10 @@ def random_points(n):
     y = np.random.uniform( miny, maxy, n)
     return x, y
 
-def random_geodataframe(n):
+def random_geodataframe(n, seed=None):
     """Random geodataframe of points"""
 
-    x,y = random_points(n)
+    x,y = random_points(n, seed)
     df = pd.DataFrame()
     df['geometry'] = list(zip(x,y))
     df['geometry'] = df['geometry'].apply(Point)
@@ -127,8 +129,8 @@ def random_geodataframe(n):
     gdf['ID'] = range(n)
     return gdf
 
-def random_herds_setts(n, ratio=0.2):
-    gdf = random_geodataframe(n)
+def random_herds_setts(n, ratio=0.2, seed=None):
+    gdf = random_geodataframe(n, seed)
     gdf['loc_type'] = np.random.choice(['herd','sett'], n, p=[1-ratio,ratio])
     return gdf
 
@@ -365,3 +367,33 @@ def run_fasttree(infile, outpath, bootstraps=100):
     cmd = '{fc} -nt {i} > {o}'.format(fc=fc,b=bootstraps,i=infile,o=out)
     tmp = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
     return out
+
+def diffseqs(seq1,seq2):
+    """Diff two sequences"""
+
+    c=0
+    for i in range(len(seq1)):
+        if seq1[i] != seq2[i]:
+            c+=1
+    return c
+
+def snp_dist_matrix(aln):
+    """Get pairwise snps distances from biopython
+       Args:
+        aln:
+            Biopython multiple sequence alignment object.
+        returns:
+            a matrix as pandas dataframe
+    """
+
+    names=[s.id for s in aln]
+    m = []
+    for i in aln:
+        x=[]
+        for j in aln:
+            d = diffseqs(i,j)
+            x.append(d)
+        #print (x)
+        m.append(x)
+    m = pd.DataFrame(m,index=names,columns=names)
+    return m
