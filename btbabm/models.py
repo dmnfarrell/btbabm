@@ -357,7 +357,7 @@ class Cow(Animal):
         return 'cow:%s (herd %s)' %(self.unique_id,self.location)
 
 class FarmPathogenModel(Model):
-    def __init__(self, F=100, C=10, S=0, mean_stay_time=100, mean_inf_time=60, mean_latency_time=100,
+    def __init__(self, F=100, C=10, S=0, mean_stay_time=200, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
                  infected_start=5, seq_length=100, #cull_rate=None,
                  graph_type='default', graph_seed=None,

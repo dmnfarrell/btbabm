@@ -58,7 +58,23 @@ def random_hex_color():
     c='#%02X%02X%02X' % (r(),r(),r())
     return c
 
-def create_closest_n_graph(n, num_closest_nodes):
+def create_graph(graph_type, graph_seed, size=10):
+    """Predefined graphs"""
+
+    pos=None
+    if graph_type == 'erdos_renyi':
+        G = nx.erdos_renyi_graph(n=size, p=0.2, seed=graph_seed)
+    elif graph_type == 'barabasi_albert':
+        G = nx.barabasi_albert_graph(n=size, m=3, seed=graph_seed)
+    elif graph_type == 'watts_strogatz':
+        G = nx.watts_strogatz_graph(n=size, k=4, p=0.1, seed=graph_seed)
+    elif graph_type == 'powerlaw_cluster':
+        G = nx.powerlaw_cluster_graph(n=size, m=3, p=0.5, seed=graph_seed)
+    elif graph_type == 'random_geometric':
+        G = nx.random_geometric_graph(n=size, p=0.2, seed=graph_seed)
+    return G, pos
+
+def closest_n_graph(n, num_closest_nodes):
 
     nodes = [i for i in range(n)]
     G = nx.Graph()
@@ -79,23 +95,7 @@ def create_closest_n_graph(n, num_closest_nodes):
             G.add_edge(node, closest_node)
     return G
 
-def create_graph(graph_type, graph_seed, size=10):
-    """Predefined graphs"""
-
-    pos=None
-    if graph_type == 'erdos_renyi':
-        G = nx.erdos_renyi_graph(n=size, p=0.2, seed=graph_seed)
-    elif graph_type == 'barabasi_albert':
-        G = nx.barabasi_albert_graph(n=size, m=3, seed=graph_seed)
-    elif graph_type == 'watts_strogatz':
-        G = nx.watts_strogatz_graph(n=size, k=4, p=0.1, seed=graph_seed)
-    elif graph_type == 'powerlaw_cluster':
-        G = nx.powerlaw_cluster_graph(n=size, m=3, p=0.5, seed=graph_seed)
-    elif graph_type == 'random_geometric':
-        G = nx.random_geometric_graph(n=size, p=0.2, seed=graph_seed)
-    return G, pos
-
-def create_herd_sett_graph(farms=20,setts=5, seed=None):
+def herd_sett_graph(farms=20,setts=5, seed=None):
     """Custom herd/sett graph with spatial positions"""
 
     n=farms+setts
@@ -134,18 +134,42 @@ def random_herds_setts(n, ratio=0.2, seed=None):
     gdf['loc_type'] = np.random.choice(['herd','sett'], n, p=[1-ratio,ratio])
     return gdf
 
-def gdf_to_distgraph(gdf):
-    """Convert geodataframe to graph"""
+def geodataframe_to_graph(gdf, d=100, key=None, attrs=[]):
+    """Convert geodataframe to graph with edges at distance threshold"""
 
-    from libpysal import weights, examples
-    coordinates = np.column_stack((gdf.geometry.x, gdf.geometry.y))
-    dist = weights.DistanceBand.from_array(coordinates, threshold=50000)
-    knn3 = weights.KNN.from_dataframe(gdf, k=3)
-    G = knn3.to_networkx()
-    pos = dict(zip(G.nodes, coordinates))
+    from scipy.spatial import distance_matrix
+
+    cent= gdf.geometry.values
+    coords = [(i.x,i.y) for i in cent]
+    distances = distance_matrix(coords,coords)
+
+    # Create an empty graph
+    G = nx.Graph()
+    for i in range(len(gdf)):
+        G.add_node(i, pos=cent[i])
+    # Loop through all pairs of centroids
+    for i in range(len(gdf)):
+        for j in range(i+1, len(gdf)):
+            if distances[i][j] <= d:
+                G.add_edge(i, j, weight=distances[i][j])
+
+    pos = dict(zip(G.nodes, coords))
+    nx.set_node_attributes(G, pos, 'pos')
+    #rename nodes
+    if key != None:
+        mapping = dict(zip(G.nodes,gdf[key]))
+        #print (mapping)
+        G = nx.relabel_nodes(G, mapping)
+    for col in attrs:
+        vals = dict(zip(G.nodes, gdf[col]))
+        nx.set_node_attributes(G, vals, col)
+    # Assign edge attributes to the graph
+    #for u, v, data in graph.edges(data=True):
+    #    data["length"] = data["weight"]
+
     return G,pos
 
-def delaunay_pysal(gdf, key='SeqID', attrs=[]):
+def delaunay_pysal(gdf, key=None, attrs=[]):
     """Get delaunay graph from gdf of points using libpysal"""
 
     from libpysal import weights, examples
@@ -157,10 +181,12 @@ def delaunay_pysal(gdf, key='SeqID', attrs=[]):
     cells, generators = voronoi_frames(coordinates, clip="extent")
     delaunay = weights.Rook.from_dataframe(cells)
     G = delaunay.to_networkx()
+
     #rename nodes
-    mapping = dict(zip(G.nodes,gdf[key]))
-    #print (mapping)
-    G = nx.relabel_nodes(G, mapping)
+    if key != None:
+        mapping = dict(zip(G.nodes,gdf[key]))
+        #print (mapping)
+        G = nx.relabel_nodes(G, mapping)
     pos = dict(zip(G.nodes, coordinates))
     nx.set_node_attributes(G, pos, 'pos')
     #print (positions)
@@ -174,11 +200,6 @@ def delaunay_pysal(gdf, key='SeqID', attrs=[]):
         dist = int(math.sqrt(sum([(a - b) ** 2 for a, b in zip(pos[a],pos[b])])))
         lengths[edge] = dist
     nx.set_edge_attributes(G, lengths, 'length')
-
-    #add names to nodes - not needed?
-    for i, node in enumerate(G.nodes()):
-        G.nodes[node]['label'] = gdf.iloc[i][key]
-
     return G, pos
 
 def add_random_edges(G, new_connections=1):
@@ -218,7 +239,13 @@ def get_largest_poly(x):
     else:
         return x
 
-def generate_land_parcels(frag=50,herds=15,frac=0.5,seed=None):
+def count_fragments(x):
+    if type(x) is MultiPolygon:
+        return len(x.geoms)
+    else:
+        return 1
+
+def generate_land_parcels(frag=100,herds=10,frac=None,shuffle=0.2,seed=None):
     """
     Simulate land parcels with fragmentation.
     Args:
@@ -234,9 +261,11 @@ def generate_land_parcels(frag=50,herds=15,frac=0.5,seed=None):
 
     n = frag
     k = herds
+    if frac==None:
+        frac = herds/frag*3
     if seed != None:
         np.random.seed(seed)
-    x,y = np.random.randint(1,100,n),np.random.randint(1,100,n)
+    x,y = np.random.randint(1,1000,n),np.random.randint(1,1000,n)
     coords = np.column_stack((x, y))
     cells, generators = voronoi_frames(coords, clip="extent")
     centroids = cells.geometry.centroid
@@ -244,7 +273,7 @@ def generate_land_parcels(frag=50,herds=15,frac=0.5,seed=None):
     kmeans = KMeans(n_clusters=k).fit(coords)
     labels = kmeans.labels_
     #randomise some labels to make fragmentation
-    cells['cluster'] = pashuffle(labels,30)
+    cells['cluster'] = pashuffle(labels,shuffle)
     #remove a few cells randomly
     cells = cells.sample(frac=frac, random_state=seed)
     poly=[]
@@ -257,17 +286,33 @@ def generate_land_parcels(frag=50,herds=15,frac=0.5,seed=None):
     #merge contiguous fragments of same herd
     farms = farms.dissolve(by='cluster').reset_index()
     farms['herd'] = farms.apply(lambda x: get_short_uid(4),1)
+    farms['fragments'] = farms.geometry.apply(count_fragments)
     return farms
 
-def pashuffle(data, perc=10, seed=None):
+def pashuffle(data, perc=.1, seed=None):
     """Partial shuffle list"""
 
     #random.seed(seed)
     for index, letter in enumerate(data):
-        if random.randrange(0, 100) < perc/2:
+        if random.randrange(0, 100) < perc*100:
             new_index = random.randrange(0, len(data))
             data[index], data[new_index] = data[new_index], data[index]
     return data
+
+def contiguous_parcels(parcels):
+    """Get all contiguous parcels. Returns dict of indexes"""
+
+    res = {}
+    for i,r in parcels.iterrows():
+        #print (r.herd)
+        polygon = r.geometry
+        spatial_index = parcels.sindex
+        possible_matches_index = list(spatial_index.intersection(polygon.bounds))
+        possible_matches = parcels.iloc[possible_matches_index]
+        x = possible_matches[possible_matches.intersects(polygon)]
+        #if len(x)>1:
+        res[i] = list(x.index)
+    return res
 
 def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size', cmap='Blues', title='', **kwargs):
     """Custom draw method for model graph network"""
@@ -315,6 +360,61 @@ def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size', cmap='Blues'
     #plt.colorbar(ax)
     plt.tight_layout()
     return
+
+def plot_grid_bokeh(model,title='', ns='num_infected'):
+    """Plot netword for model with bokeh"""
+
+    from bokeh.plotting import show,figure, from_networkx
+    from bokeh.models import (BoxZoomTool, Circle, HoverTool, Label, LabelSet,
+                              MultiLine, Plot, Range1d, ResetTool)
+    from bokeh.models.sources import ColumnDataSource
+
+    G = model.G.copy()
+    for n in G.nodes:
+        G.nodes[n]['agent'] = 'X'
+
+    cmap = strain_cmap
+    states = [f.main_strain() for f in model.grid.get_all_cell_contents()]
+    node_colors = [cmap[n] for n in states]
+    #data for herds/setts
+    data = model.get_herds_data()
+    #print (data)
+
+    if ns == 'num_infected':
+        data['ns'] = data['infected']+1
+    elif ns == 'herd_size':
+        data['ns'] = data['size']+1
+
+    def calc_layout(G: nx.Graph, scale=None, center=None):
+        return {i:list(model.pos[i]) for i in model.pos}
+    if model.pos == None:
+        pos =  nx.spring_layout
+    else:
+        pos=calc_layout
+
+    plot = Plot(sizing_mode='stretch_width', plot_height=600, title=title)
+
+    graph_renderer = from_networkx(G, pos, scale=1, center=(0,0))
+    if data is not None:
+        source = ColumnDataSource(data=data)
+        graph_renderer.node_renderer.data_source = source
+
+    # Customize the node appearance
+    if node_colors is None:
+        node_colors = [None] * len(G.nodes)
+
+    graph_renderer.node_renderer.data_source.data['fill_color'] = node_colors
+    graph_renderer.node_renderer.glyph = Circle(size=8, fill_color='fill_color', fill_alpha=0.6)
+    graph_renderer.node_renderer.glyph.size = 'ns'
+    # Customize the edge appearance
+    graph_renderer.edge_renderer.glyph = MultiLine(line_color="#CCCCCC", line_alpha=0.8, line_width=.5)
+    # Add the graph to the plot
+    plot.renderers.append(graph_renderer)
+    node_hover_tool = HoverTool(tooltips=[("id", "@id"), ("loc_type", "@loc_type"),
+                                          ("size", "@size"), ("infected", "@infected")])
+    plot.add_tools(node_hover_tool, BoxZoomTool(), ResetTool())
+
+    return plot
 
 def plot_inf_data(model):
     #fig,ax=plt.subplots(2,2,figsize=(12,4))
