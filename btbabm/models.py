@@ -73,17 +73,20 @@ class Strain:
         #mutation rate per nucl per year
         self.mutation_rate = 5e-2
 
-    def mutate(self, p=None, n=1):
-        """Mutate the sequence in place"""
+    def mutate(self, p=0.05, n=1):
+        """Mutate the sequence in place.
+        Args:
+            p: probability of a mutation
+            n: number of mutations
+        """
 
         mr = self.mutation_rate
         mutseq = list(self.sequence)
-        if p == None:
-            p = np.random.choice([0,1], p=[1-mr,mr])
-        if p == 1:
-            i=random.randint(0,len(mutseq)-1)
-            mutseq[i] = random.choice(['A','T','G','C'])
-
+        if random.uniform(0, 1) > p:
+            return
+        for i in range(n):
+            pos = random.randint(0,len(mutseq)-1)
+            mutseq[pos] = random.choice(['A','T','G','C'])
         self.sequence = "".join(mutseq)
         return #Strain(self.name, mutseq)
 
@@ -258,6 +261,7 @@ class Badger(Animal):
             t = self.model.schedule.time-self.infection_start
             if t >= self.time_to_death:
                 self.model.remove_animal(self)
+                self.death_time = self.model.schedule.time
                 current_sett = self.model.get_node(self.location)
                 self.model.add_badger(sett=current_sett)
 
@@ -293,8 +297,9 @@ class Cow(Animal):
 
         self.time_at_farm += 1
         self.age +=1
-        #if self.time_at_farm >= self.stay_time:
-        #    self.move()
+        moves = self.model.allow_moves
+        if self.time_at_farm >= self.stay_time and moves==True:
+            self.move()
         self.contact()
         curr = self.location
         #self.model.callback(model.grid.get_all_cell_contents())
@@ -313,21 +318,25 @@ class Cow(Animal):
         """Move to another farm anywhere on network. Can include moves only
         to similar type farms etc."""
 
-        print ('move')
+        model = self.model
         curr = self.location
-        current_farm = self.model.get_node(curr)
+        current_farm = model.get_node(curr)
         G = self.model.G
 
         #get random farm
-        #next_farm = self.model.get ...
-
+        next_farm = model.get_random_location()
+        if type(next_farm) is Sett:
+            return
+        #print (next_farm)
+        #print ('move')
+        new = next_farm.unique_id
         current_farm.animals.remove(self)
         next_farm.animals.append(self)
         self.location = new
         self.time_at_farm = 0
-        self.stay_time = abs(int(random.normalvariate(150,100)))
+        self.stay_time = abs(int(random.normalvariate(model.mean_stay_time,100)))
         current_farm.moves += 1
-        t = self.model.schedule.time
+        t = model.schedule.time
         self.moves.append([curr, new, t])
         return
 
@@ -340,6 +349,7 @@ class Cow(Animal):
         if self.state == State.INFECTED:
             if t >= self.time_to_death or self.age>self.death_age:
                 self.model.remove_animal(self)
+                self.death_time = self.model.schedule.time
                 current_farm = self.model.get_node(self.location)
                 #replace the animal in the population
                 if len(current_farm.animals)<2:
@@ -357,9 +367,10 @@ class Cow(Animal):
         return 'cow:%s (herd %s)' %(self.unique_id,self.location)
 
 class FarmPathogenModel(Model):
-    def __init__(self, F=100, C=10, S=0, mean_stay_time=200, mean_inf_time=60, mean_latency_time=100,
+    def __init__(self, F=100, C=10, S=0, mean_stay_time=300, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
-                 infected_start=5, seq_length=100, #cull_rate=None,
+                 infected_start=5, allow_moves=False,
+                 seq_length=100,
                  graph_type='default', graph_seed=None,
                  callback=None):
 
@@ -380,7 +391,7 @@ class FarmPathogenModel(Model):
         self.start_strains = {}
         for s in strain_names:
             strain = self.start_strains[s] = Strain(s, self.base_sequence)
-            strain.mutate(p=1)
+            strain.mutate(p=1,n=5)
             #print (s,strain.sequence)
         self.schedule = RandomActivation(self)
         self.year = 1
@@ -388,7 +399,7 @@ class FarmPathogenModel(Model):
         self.agents_added = 0
         self.removed = []
         total = self.num_farms + self.num_setts
-
+        self.allow_moves = allow_moves
         self.callback = callback
 
         #if graph is not None:
@@ -530,8 +541,12 @@ class FarmPathogenModel(Model):
                         f.moves])
         return pd.DataFrame(res,columns=['id','loc_type','herd_class','size','infected','moves'])
 
-    def get_random_location(self, k=1):
-        return random.sample(self.grid.get_all_cell_contents(), k)
+    def get_random_node(self):
+        n = random.sample(self.G.nodes, 1)[0]
+        return self.G.nodes[n]
+
+    def get_random_location(self):
+        return random.sample(self.grid.get_all_cell_contents(), 1)[0]
 
     def get_column_data(self):
         """pivot the model dataframe to get states count at each step"""
@@ -557,6 +572,7 @@ class FarmPathogenModel(Model):
                 s=None
             x.append([a.unique_id,a.species,a.state,s,a.infection_start,t-a.infection_start,a.death_age,a.location,len(a.moves)])
         df = pd.DataFrame(x,columns=['id','species','state','strain','inf_start','inf_time','death_age','herd','moves'])
+        df['year'] = df.apply(lambda x: math.ceil(x.death_age/365),1)
         return df
 
     def get_infected_data(self):
@@ -564,16 +580,18 @@ class FarmPathogenModel(Model):
 
         return self.get_animal_data(infected=True)
 
-    def get_moves(self):
+    def get_moves(self, removed=False):
         """Return all moves"""
 
         res = []
-        for farm in self.get_farms():
-            for a in farm.animals:
-                for m in a.moves:
-                    if len(m)>0:
-                        res.append([a.unique_id]+m)
-        return pd.DataFrame(res,columns=['id','start','end','time'])
+        animals = self.get_animals()
+        if removed == True:
+            animals.extend(self.removed)
+        for a in animals:            
+            for m in a.moves:
+                if len(m)>0:
+                    res.append([a.unique_id,a.death_time]+m)
+        return pd.DataFrame(res,columns=['id','death_time','start','end','time'])
 
     def get_sequences(self, removed=False, redundant=True):
         """Get strain sequences of infected"""

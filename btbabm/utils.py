@@ -109,13 +109,12 @@ def herd_sett_graph(farms=20,setts=5, seed=None):
 def random_points(n, seed=None):
     """Random points"""
 
-    if seed != None:
-        np.random.seed(seed)
+    np.random.seed(seed)
     points = []
-    bounds = [10,10,100,100]
+    bounds = [10,10,1000,1000]
     minx, miny, maxx, maxy = bounds
     x = np.random.uniform( minx, maxx, n)
-    y = np.random.uniform( miny, maxy, n)
+    y = np.random.uniform( miny, maxy, n)    
     return x, y
 
 def random_geodataframe(n, seed=None):
