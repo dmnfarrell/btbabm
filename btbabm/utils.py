@@ -101,10 +101,13 @@ def herd_sett_graph(farms=20,setts=5, seed=None):
     n=farms+setts
     gdf = random_herds_setts(n,ratio=setts/n, seed=seed)
     G,pos = delaunay_pysal(gdf, 'ID', attrs=['loc_type'])
+    #G,pos = geodataframe_to_graph(gdf, 'ID', attrs=['loc_type'])
     #add more edges for herds
     #new_edges = add_random_edges(G,4)
     #G.add_edges_from(new_edges)
-    return G,pos
+    #sparsify local edges
+    remove_random_edges(G)
+    return G,pos,gdf
 
 def random_points(n, seed=None):
     """Random points"""
@@ -114,7 +117,7 @@ def random_points(n, seed=None):
     bounds = [10,10,1000,1000]
     minx, miny, maxx, maxy = bounds
     x = np.random.uniform( minx, maxx, n)
-    y = np.random.uniform( miny, maxy, n)    
+    y = np.random.uniform( miny, maxy, n)
     return x, y
 
 def random_geodataframe(n, seed=None):
@@ -128,12 +131,21 @@ def random_geodataframe(n, seed=None):
     gdf['ID'] = range(n)
     return gdf
 
+def jitter_points(r, scale=2e-2):
+    """Jitter GeoDataFrame points"""
+
+    a=np.random.normal(0,scale)
+    b=np.random.normal(0,scale)
+    if (r.geometry.is_empty): return Point()
+    x,y = r.geometry.x+a,r.geometry.y+b
+    return Point(x,y)
+
 def random_herds_setts(n, ratio=0.2, seed=None):
     gdf = random_geodataframe(n, seed)
     gdf['loc_type'] = np.random.choice(['herd','sett'], n, p=[1-ratio,ratio])
     return gdf
 
-def geodataframe_to_graph(gdf, d=100, key=None, attrs=[]):
+def geodataframe_to_graph(gdf, key=None, attrs=[], d=200):
     """Convert geodataframe to graph with edges at distance threshold"""
 
     from scipy.spatial import distance_matrix
@@ -200,6 +212,27 @@ def delaunay_pysal(gdf, key=None, attrs=[]):
         lengths[edge] = dist
     nx.set_edge_attributes(G, lengths, 'length')
     return G, pos
+
+def get_community(G,pos):
+    """Get network community using Louvain method"""
+
+    from networkx.algorithms import community
+    comm=community.louvain_communities(G, resolution=.5, seed=5)
+    set_node_community(G, comm)
+    clrs = ({c:random_color() for c in range(len(comm)+1)})
+    node_color = [clrs[G.nodes[v]['community']] for v in G.nodes]
+    fig,ax=plt.subplots(figsize=(12,10))
+    nx.draw(G, pos, node_size=400, node_color=node_color, with_labels=True, font_size=8, ax=ax)
+    return G
+
+def remove_random_edges(G, prob=0.02):
+    """Remove random edges"""
+
+    for i in range(10):
+        for edge in G.edges():
+            if random.random() < prob:
+                G.remove_edge(*edge)
+    return
 
 def add_random_edges(G, new_connections=1):
     """
@@ -313,7 +346,8 @@ def contiguous_parcels(parcels):
         res[i] = list(x.index)
     return res
 
-def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size', cmap='Blues', title='', **kwargs):
+def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size',
+                cmap='Blues', title='', **kwargs):
     """Custom draw method for model graph network"""
 
     from matplotlib.colors import ListedColormap, LinearSegmentedColormap
@@ -441,8 +475,11 @@ def draw_tree(filename,df=None,col=None,width=500,**kwargs):
 
     tre = toytree.tree(filename)
     if df is not None:
-        #cmap = ({c:random_hex_color() for c in df[col].unique()})
-        cmap = strain_cmap
+        if col == 'strain':
+            cmap = strain_cmap
+        else:
+            cmap = ({c:random_hex_color() for c in df[col].unique()})
+
         df['color'] = df[col].apply(lambda x: cmap[x])
         idx=tre.get_tip_labels()
         df=df.loc[idx]

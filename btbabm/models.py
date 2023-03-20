@@ -38,7 +38,7 @@ seq_length - sequence length
 herd_class - type of herd
 '''
 
-strain_names = string.ascii_letters[:5].upper()
+strain_names = string.ascii_letters[:8].upper()
 HERD_CLASSES = ['beef','dairy','beef suckler','fattening']
 
 def grid_from_spatial_graph(model, G):
@@ -51,7 +51,7 @@ def grid_from_spatial_graph(model, G):
     locs = nx.get_node_attributes(G, 'loc_type')
     for node in G.nodes():
         #print (node, locs[node])
-        nodetype= locs[node]
+        nodetype = locs[node]
         if nodetype == 'sett':
             sett = Sett(node, model)
             grid.place_agent(sett, node)
@@ -182,7 +182,7 @@ class Animal(object):
         #self.farm = None
         return
 
-    def contact(self):
+    def contact_neighbours(self):
         """
         Contact a neighbouring node. Only farms with nearby generate_land_parcels
         should have connected nodes. Any animal can contact one in the other location.
@@ -199,17 +199,16 @@ class Animal(object):
             new = random.choice(nn)
             loc = self.model.get_node(new)
             if self.state == State.INFECTED:
-                if type(loc) is Farm:
-                    #interact with random
-                    for animal in loc.animals:
-                        if animal.state == State.SUSCEPTIBLE:
-                            animal.infect(self.strain, self.model.bctrans)
+                #if type(loc) is Farm:
+                #interact with random
+                for animal in loc.animals:
+                    if animal.state == State.SUSCEPTIBLE:
+                        animal.infect(self.strain, self.model.bctrans)
 
-                elif self.state == State.SUSCEPTIBLE:
-                    #infect badger
-                    for animal in loc.animals:
-                        if animal.state == State.INFECTED:
-                            self.infect(animal.strain, self.model.bctrans)
+            elif self.state == State.SUSCEPTIBLE:
+                for animal in loc.animals:
+                    if animal.state == State.INFECTED:
+                        self.infect(animal.strain, self.model.bctrans)
 
             self.time_last_move = t
         return
@@ -240,17 +239,23 @@ class Badger(Animal):
         self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time*2,100)))
         self.moves = []
 
-    def step(self):
-        """Do step"""
+    def contact(self):
+        """Contact animals on same node"""
 
-        self.age +=1
-        self.contact()
         curr = self.location
         sett = self.model.get_node(curr)
         if self.state == State.SUSCEPTIBLE:
             for animal in sett.get_infected():
                 if animal.state == State.INFECTED:
                     self.infect(animal.strain, self.model.bctrans)
+        return
+
+    def step(self):
+        """Do step"""
+
+        self.age +=1
+        self.contact()
+        self.contact_neighbours()
         self.infection_status()
         return
 
@@ -288,6 +293,17 @@ class Cow(Animal):
         self.moves = []
         return
 
+    def contact(self):
+        """Contact animals on same node"""
+
+        curr = self.location
+        farm = self.model.get_node(curr)
+        if self.state == State.SUSCEPTIBLE:
+            for animal in farm.get_infected():
+                if animal.state == State.INFECTED:
+                    self.infect(animal.strain, self.model.cctrans)
+        return
+
     def step(self):
         """
         Step in simulation.
@@ -301,16 +317,8 @@ class Cow(Animal):
         if self.time_at_farm >= self.stay_time and moves==True:
             self.move()
         self.contact()
-        curr = self.location
+        self.contact_neighbours()
         #self.model.callback(model.grid.get_all_cell_contents())
-        farm = self.model.get_node(curr)
-
-        #check if infected animals on farm
-        if self.state == State.SUSCEPTIBLE:
-            for animal in farm.get_infected():
-                if animal.state == State.INFECTED:
-                    self.infect(animal.strain, self.model.cctrans)
-
         self.infection_status()
         return
 
@@ -367,6 +375,8 @@ class Cow(Animal):
         return 'cow:%s (herd %s)' %(self.unique_id,self.location)
 
 class FarmPathogenModel(Model):
+    """A BTB pathogen model with herd and badger transmission"""
+
     def __init__(self, F=100, C=10, S=0, mean_stay_time=300, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
                  infected_start=5, allow_moves=False,
@@ -405,10 +415,11 @@ class FarmPathogenModel(Model):
         #if graph is not None:
         if graph_type == 'default':
             #creates grid from custom graph
-            graph,pos = utils.create_herd_sett_graph(F,S,graph_seed)
+            graph,pos,gdf = utils.herd_sett_graph(F,S,graph_seed)
             self.grid = grid_from_spatial_graph(self, graph)
             self.G = graph
-            self.pos=pos
+            self.pos = pos
+            self.gdf = gdf
         else:
             self.G,pos = utils.create_graph(graph_type, graph_seed, total)
             self.grid = NetworkGrid(self.G)
@@ -587,7 +598,7 @@ class FarmPathogenModel(Model):
         animals = self.get_animals()
         if removed == True:
             animals.extend(self.removed)
-        for a in animals:            
+        for a in animals:
             for m in a.moves:
                 if len(m)>0:
                     res.append([a.unique_id,a.death_time]+m)
@@ -632,15 +643,25 @@ class FarmPathogenModel(Model):
         snipgenie.trees.convert_branch_lengths('tree.newick','tree.newick', ls)
         return seqs
 
-    def get_clades(model, newick=None, removed=False, redundant=True):
+    def get_clades(self, newick=None, removed=False, redundant=True):
         """Get clades from newick tree"""
 
-        if newick==None:
-            seqs = model.make_phylogeny(removed, redundant)
+        if newick == None:
+            seqs = self.make_phylogeny(removed, redundant)
             newick = 'tree.newick'
         import snipgenie
-        cl = snipgenie.trees.get_clusters(newick)
+        cl = snipgenie.trees.get_clusters(newick).astype(str)
         return cl
+
+    def get_geodataframe(self,removed=False):
+        """Get geodataframe of all animal locations, assumes we are using a graph
+        with positions.
+        """
+
+        animals = self.get_animal_data(removed=removed)
+        self.gdf = self.gdf.rename(columns={'ID':'herd'})
+        gdf = self.gdf.merge(animals,on='herd',how='inner')
+        return gdf
 
     def __repr__(self):
         l1 = 'model with %s farms, %s setts and %s animals\n' %(self.num_farms, self.num_setts, len(self.get_animals()))
