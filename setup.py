@@ -22,7 +22,9 @@ setup(
                       'matplotlib>=3.0',
                       'mesa',
                       'geopandas',
-                      'toytree'
+                      'toytree',
+                      'bokeh',
+                      'panel'
                       ],
     entry_points = {
         'console_scripts': [

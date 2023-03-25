@@ -24,6 +24,8 @@ import geopandas as gpd
 from shapely.geometry import Point,MultiPoint,MultiPolygon
 
 def random_color(seed=None):
+    """random rgb color"""
+
     if seed != None:
         random.seed = seed
     return tuple([np.random.random_sample() for i in range(3)])
@@ -31,7 +33,8 @@ def random_color(seed=None):
 strain_names = string.ascii_letters[:10].upper()
 #strain_cmap = ({c:random_color(seed=1) for c in strain_names})
 strain_cmap = {'A':'coral','B':'dodgerblue','C':'lightgreen','D':'mediumpurple',
-                'E':'orange','F':'pink','G':'gold','H':'cyan'}
+                'E':'orange','F':'pink','G':'gold','H':'cyan','I':'beige','J':'red',
+                'K':'brown'}
 strain_cmap[None] = 'gray'
 
 def get_short_uid(n=10):
@@ -54,9 +57,16 @@ def random_sequence(length=50):
     return seq
 
 def random_hex_color():
-    r = lambda: random.randint(0,255)
+    """random hex color"""
+
+    r = lambda: np.random.randint(0,255)
     c='#%02X%02X%02X' % (r(),r(),r())
     return c
+
+def random_hex_colors(n=1,seed=None):
+    if seed != None:
+        np.random.seed(seed)
+    return [random_hex_color() for i in range(n)]
 
 def create_graph(graph_type, graph_seed, size=10):
     """Predefined graphs"""
@@ -109,21 +119,20 @@ def herd_sett_graph(farms=20,setts=5, seed=None):
     remove_random_edges(G)
     return G,pos,gdf
 
-def random_points(n, seed=None):
+def random_points(n, bounds=[10,10,1000,1000], seed=None):
     """Random points"""
 
     np.random.seed(seed)
-    points = []
-    bounds = [10,10,1000,1000]
+    points = []    
     minx, miny, maxx, maxy = bounds
     x = np.random.uniform( minx, maxx, n)
     y = np.random.uniform( miny, maxy, n)
     return x, y
 
-def random_geodataframe(n, seed=None):
+def random_geodataframe(n, bounds=[10,10,1000,1000], seed=None):
     """Random geodataframe of points"""
 
-    x,y = random_points(n, seed)
+    x,y = random_points(n, bounds, seed)
     df = pd.DataFrame()
     df['geometry'] = list(zip(x,y))
     df['geometry'] = df['geometry'].apply(Point)
@@ -174,9 +183,10 @@ def geodataframe_to_graph(gdf, key=None, attrs=[], d=200):
     for col in attrs:
         vals = dict(zip(G.nodes, gdf[col]))
         nx.set_node_attributes(G, vals, col)
-    # Assign edge attributes to the graph
-    #for u, v, data in graph.edges(data=True):
-    #    data["length"] = data["weight"]
+    # Assign edge weights as distances
+    for u, v in G.edges():
+        d = ((pos[u][0] - pos[v][0])**2 + (pos[u][1] - pos[v][1])**2)**0.5
+        G.add_edge(u, v, weight=round(d,1))
 
     return G,pos
 
@@ -277,24 +287,24 @@ def count_fragments(x):
     else:
         return 1
 
-def generate_land_parcels(frag=100,herds=10,frac=None,shuffle=0.2,seed=None):
+def generate_land_parcels(cells=100,herds=10,empty=0,fragments=0,
+                        fragmented_farms=1,seed=None):
     """
     Simulate land parcels with fragmentation.
     Args:
-        frag: number of points to make polyons
+        cells: number of points to make initial cell polyons
         herds: number of farms
-        frac: fraction of fragments that are empty
+        empty: fraction of fragments that are empty
+        fragments: number of empty cells to add back as fragments
     """
 
-    from shapely.geometry import Point,MultiPoint,MultiPolygon
+    from shapely.geometry import Point,MultiPoint,MultiPolygon,Polygon
     from libpysal import weights, examples
     from libpysal.cg import voronoi_frames
     from sklearn.cluster import KMeans
 
-    n = frag
+    n = cells
     k = herds
-    if frac==None:
-        frac = herds/frag*3
     if seed != None:
         np.random.seed(seed)
     x,y = np.random.randint(1,1000,n),np.random.randint(1,1000,n)
@@ -302,23 +312,57 @@ def generate_land_parcels(frag=100,herds=10,frac=None,shuffle=0.2,seed=None):
     cells, generators = voronoi_frames(coords, clip="extent")
     centroids = cells.geometry.centroid
     #cluster parcels into 'herds'
-    kmeans = KMeans(n_clusters=k).fit(coords)
-    labels = kmeans.labels_
-    #randomise some labels to make fragmentation
-    cells['cluster'] = pashuffle(labels,shuffle)
-    #remove a few cells randomly
-    cells = cells.sample(frac=frac, random_state=seed)
+    kmeans = KMeans(n_clusters=k,n_init='auto').fit(coords)
+    cells['cluster'] = kmeans.labels_
+
+    #remove some proportion of cells randomly
+    e = cells.sample(frac=empty, random_state=seed)
+    cells.loc[e.index,'cluster'] = 'empty'
+
+    #create new GeoDataFrame
     poly=[]
     data = {'cluster':[]}
     for c,g in cells.groupby('cluster'):
+        if c == 'empty':
+            continue
         poly.append(MultiPolygon(list(g.geometry)))
         data['cluster'].append(c)
-
     farms = gpd.GeoDataFrame(data=data,geometry=poly)
+
     #merge contiguous fragments of same herd
     farms = farms.dissolve(by='cluster').reset_index()
+    #remove polygons with 'holes'
+    def no_holes(x):
+        if type(x) is MultiPolygon:
+            return MultiPolygon(Polygon(p.exterior) for p in x.geoms)
+        else:
+            return Polygon(x.exterior)
+    farms.geometry = farms.geometry.apply(no_holes)
+    #print (farms)
+
+    #remove empty cells inside parcels
+    e = e[e.within(farms.unary_union)==False]
+
+    #assign some of the empty cells as fragments
+    #indexes = farms.sample(fragmented_farms).index
+    for index in farms.sample(fragmented_farms).index:
+        for i,r in cells.loc[e.index].sample(fragments).iterrows():
+            #print (index)
+            poly = farms.iloc[index].geometry
+            if type(poly) is MultiPolygon:
+                geom = poly.geoms
+                new = MultiPolygon(list(geom) + [r.geometry])
+            else:
+                geom = poly
+                new = MultiPolygon([geom,r.geometry])
+            farms.loc[index,'geometry'] = new
+
+    #merge contiguous fragments again in case we added fragments
+    farms = farms.dissolve(by='cluster').reset_index()
+
     farms['herd'] = farms.apply(lambda x: get_short_uid(4),1)
     farms['fragments'] = farms.geometry.apply(count_fragments)
+    farms['color'] = random_hex_colors(len(farms),seed=seed)
     return farms
 
 def pashuffle(data, perc=.1, seed=None):

@@ -38,7 +38,7 @@ seq_length - sequence length
 herd_class - type of herd
 '''
 
-strain_names = string.ascii_letters[:8].upper()
+strain_names = string.ascii_letters[:10].upper()
 HERD_CLASSES = ['beef','dairy','beef suckler','fattening']
 
 def grid_from_spatial_graph(model, G):
@@ -234,8 +234,9 @@ class Badger(Animal):
         super().__init__(model)
         self.species = 'badger'
         self.time_last_move = 0
-        self.death_age = abs(int(random.normalvariate(8*365,1000)))
-        self.latency_period = abs(int(random.normalvariate(200,100)))
+        self.death_age = abs(int(random.normalvariate(5*365,1000)))
+        #self.latency_period = abs(int(random.normalvariate(200,100)))
+        self.latency_period = random.randint(1,model.mean_latency_time)
         self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time*2,100)))
         self.moves = []
 
@@ -437,14 +438,17 @@ class FarmPathogenModel(Model):
                 self.grid.place_agent(farm, node)
 
         #add cows randomly
+        strains = strain_names
+
         infectedcount=0
         for i in range(self.num_cows):
             animal = self.add_animal()
             if infectedcount <= infected_start:
                 animal.state = State.INFECTED
+                #s = strains[infectedcount]
                 s = random.choice(strain_names)
                 animal.strain = self.start_strains[s]
-            infectedcount+=1
+                infectedcount+=1
 
         #add badgers randomly
         l = self.agents_added+1
@@ -454,8 +458,10 @@ class FarmPathogenModel(Model):
                 continue
             if random.choice(range(5)) == 1:
                 animal.state = State.INFECTED
+                #s = strains[infectedcount]
                 s = random.choice(strain_names)
                 animal.strain = self.start_strains[s]
+                infectedcount+=1
 
         self.datacollector = DataCollector(
             agent_reporters={"State": "state"})
@@ -662,6 +668,12 @@ class FarmPathogenModel(Model):
         self.gdf = self.gdf.rename(columns={'ID':'herd'})
         gdf = self.gdf.merge(animals,on='herd',how='inner')
         return gdf
+
+    def save(self):
+        """Save model to file"""
+
+
+        return
 
     def __repr__(self):
         l1 = 'model with %s farms, %s setts and %s animals\n' %(self.num_farms, self.num_setts, len(self.get_animals()))

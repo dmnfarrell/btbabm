@@ -27,7 +27,7 @@ In Python you can run the model as follows:
 from btbabm import models
 from btbabm import utils
 model = models.FarmPathogenModel(F=30,C=800,S=10,mean_inf_time=20,mean_stay_time=150,
-                       cctrans=0.01,seq_length=100,graph_type='barabasi_albert')
+                       cctrans=0.01,seq_length=100,graph_seed=4)
 for s in range(100):
   model.step()
 
