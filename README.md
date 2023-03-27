@@ -19,6 +19,12 @@ Times are given in days since each step is a day.
 * seq_length - sequence length for simulating strains/mutations
 * herd_class - type of herd
 
+## Installation
+
+If you want to try this out, the easiest way is to install with pip:
+
+`pip install -e git+https://github.com/dmnfarrell/btbabm.git#egg=btbabm`
+
 ## Usage
 
 In Python you can run the model as follows:

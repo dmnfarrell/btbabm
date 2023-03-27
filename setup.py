@@ -10,7 +10,7 @@ setup(
     description = 'bTB Agent based model',
     long_description = long_description,
     url='https://github.com/dmnfarrell/btbabm',
-    license='GPL v3',
+    license='Apache',
     author = 'Damien Farrell',
     author_email = 'farrell.damien@gmail.com',
     packages = ['btbabm'],
@@ -18,7 +18,7 @@ setup(
                   'description.txt']
                  },
     install_requires=['numpy>=1.2',
-                      'pandas>=0.24',
+                      'pandas>=1.5',
                       'matplotlib>=3.0',
                       'mesa',
                       'geopandas',
@@ -28,7 +28,7 @@ setup(
                       ],
     entry_points = {
         'console_scripts': [
-            'btbabm-dashboard=btb.dashboard:main']
+            'btbabm-dashboard=btbabm.dashboard:main']
             },
     classifiers = ['Operating System :: OS Independent',
             'Programming Language :: Python :: 3.10',

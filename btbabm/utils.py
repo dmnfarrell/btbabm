@@ -119,7 +119,7 @@ def herd_sett_graph(farms=20,setts=5, seed=None):
     remove_random_edges(G)
     return G,pos,gdf
 
-def random_points(n, bounds=[10,10,1000,1000], seed=None):
+def random_points(n, bounds=(10,10,1000,1000), seed=None):
     """Random points"""
 
     np.random.seed(seed)
@@ -129,7 +129,7 @@ def random_points(n, bounds=[10,10,1000,1000], seed=None):
     y = np.random.uniform( miny, maxy, n)
     return x, y
 
-def random_geodataframe(n, bounds=[10,10,1000,1000], seed=None):
+def random_geodataframe(n, bounds=(10,10,1000,1000), seed=None):
     """Random geodataframe of points"""
 
     x,y = random_points(n, bounds, seed)
@@ -150,7 +150,7 @@ def jitter_points(r, scale=2e-2):
     return Point(x,y)
 
 def random_herds_setts(n, ratio=0.2, seed=None):
-    gdf = random_geodataframe(n, seed)
+    gdf = random_geodataframe(n, seed=seed)
     gdf['loc_type'] = np.random.choice(['herd','sett'], n, p=[1-ratio,ratio])
     return gdf
 
