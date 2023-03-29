@@ -32,11 +32,18 @@ In Python you can run the model as follows:
 ```python
 from btbabm import models
 from btbabm import utils
+
 model = models.FarmPathogenModel(F=30,C=800,S=10,mean_inf_time=20,mean_stay_time=150,
                        cctrans=0.01,seq_length=100,graph_seed=4)
+#run 100 steps
 for s in range(100):
   model.step()
 
+#equivalent code with progress bar
+model.run(100)
+
+#get state data
+df = model.get_column_data()
 #get data for infected animals
 df = model.get_infected_data()
 #plot the grid
@@ -50,7 +57,7 @@ There is a panel dashboard for experimenting with model. It can be run by execut
 
 <img src=img/dash_scr.png width=600px>
 
-## Refs
+## References
 
 * [Mesa](https://mesa.readthedocs.io/)
 * [Individual-based model for the control of Bovine Viral Diarrhea spread in livestock trade networks](https://www.sciencedirect.com/science/article/pii/S0022519321002393?via%3Dihub)

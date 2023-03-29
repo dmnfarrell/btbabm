@@ -41,6 +41,15 @@ herd_class - type of herd
 strain_names = string.ascii_letters[:10].upper()
 HERD_CLASSES = ['beef','dairy','beef suckler','fattening']
 
+def load_model(filename):
+    """Load model object"""
+
+    import bz2, pickle
+    ifile = bz2.BZ2File(filename,'rb')
+    obj = pickle.load(ifile)
+    ifile.close()
+    return obj
+
 def grid_from_spatial_graph(model, G):
     """
     Great the networkgrid from a predefined graph,
@@ -479,6 +488,16 @@ class FarmPathogenModel(Model):
         #self.callback(len(self.get_farms()))
         return
 
+    def run(self, steps):
+        """Run n steps with progress bar"""
+
+        from tqdm import tqdm
+        with tqdm(total=steps) as pbar:
+            for i in range(steps):
+                self.step()
+                pbar.update(1)
+        return
+
     def get_node(self, node):
         """Get object inside a node by id"""
 
@@ -669,10 +688,25 @@ class FarmPathogenModel(Model):
         gdf = self.gdf.merge(animals,on='herd',how='inner')
         return gdf
 
-    def save(self):
+    def plot(self, ax=None):
+        """Shorthand for using utils.plot_grid"""
+
+        if ax == None:
+            f,ax = plt.subplots(1,1)
+        utils.plot_grid(self,ax=ax,pos=self.pos,colorby='strain',ns='num_infected')
+        return
+
+    def plot_bokeh(self, title=''):
+        p = utils.plot_grid_bokeh(self, title=title)
+        return p
+
+    def save(self, filename):
         """Save model to file"""
 
-
+        import pickle
+        import bz2
+        ofile = bz2.BZ2File(filename,'wb')
+        pickle.dump(self,ofile)
         return
 
     def __repr__(self):
