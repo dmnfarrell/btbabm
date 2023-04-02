@@ -390,6 +390,48 @@ def contiguous_parcels(parcels):
         res[i] = list(x.index)
     return res
 
+def network_from_land_parcels(cells=100,farms=20,setts=0,dist=100,**kwargs):
+    """
+    Create simulated land parcels and associated contact network.
+    Args: 
+        dist: max distance at which to connect two nodes
+        see utils.generate_land_parcels
+    Returns:
+        land parcels - geodataframe
+        centroids - geodataframe
+        graph - networkx graph
+        pos - positions for graph
+    """
+
+    farms = generate_land_parcels(cells,farms,**kwargs)
+
+    #add setts
+    setts = random_geodataframe(setts)
+    setts['loc_type']='sett'
+    setts['color'] = 'blue'
+
+    #get cents
+    larg = farms.geometry.apply(get_largest_poly)
+    cent = gpd.GeoDataFrame(data=farms.copy(),geometry=larg.geometry.centroid)
+    cent['loc_type']='cow'
+    cent['color'] = farms.color
+
+    #make network graph
+    gdf = pd.concat([cent,setts]).reset_index(drop=True)
+    G,pos = geodataframe_to_graph(gdf, d=dist, attrs=['loc_type','herd'])
+
+    #add egdes where nodes have contiguous parcels
+    cont = contiguous_parcels(farms)    
+    for n in G.nodes:
+        if n not in cont: 
+            continue
+        for j in cont[n]:
+            if j!=n:
+                G.add_edge(n,j)
+    #add more egdes for setts if near any other parcels
+
+    return farms, cent, G, pos
+
 def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size',
                 cmap='Blues', title='', **kwargs):
     """Custom draw method for model graph network"""
