@@ -54,6 +54,9 @@ def grid_from_spatial_graph(model, G):
     """
     Great the networkgrid from a predefined graph,
     used so we can convert from spatial data.
+    Args:
+        model: FarmPathogenModel
+        G: networkx graph
     """
 
     grid = NetworkGrid(G)
@@ -387,12 +390,29 @@ class Cow(Animal):
 class FarmPathogenModel(Model):
     """A BTB pathogen model with herd and badger transmission"""
 
-    def __init__(self, F=100, C=10, S=0, mean_stay_time=300, mean_inf_time=60, mean_latency_time=100,
+    def __init__(self, F=100, C=10, S=0, graph=None, pos=None,
+                 mean_stay_time=300, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
                  infected_start=5, allow_moves=False,
                  seq_length=100,
-                 graph_type='default', graph_seed=None,
+                 graph_seed=None,
                  callback=None):
+
+        """
+        Args:
+            F: no. of farms
+            C: no. of cows
+            S: no. of setts
+            graph: provide a predefined graph network to make the grid from
+            mean_stay_time: mean time in a herd
+            mean_inf_time: mean infection time
+            cctrans: cow-cow transmission prob
+            bctrans: badger-cow transmission prob
+            infected_start: number of infected animals at start
+            allow_moves: allow movements between unconnected nodes
+            seq_length: sequence length of simulated strain sequences
+            graph_seed: seed for making graph if no graph provided
+        """
 
         self.num_farms = F
         self.num_setts = S
@@ -422,33 +442,21 @@ class FarmPathogenModel(Model):
         self.allow_moves = allow_moves
         self.callback = callback
 
-        #if graph is not None:
-        if graph_type == 'default':
+        if graph is not None:
+            self.grid = grid_from_spatial_graph(self, graph)
+            self.G = graph
+            self.pos = pos
+            self.num_farms = len(self.G.nodes())
+        else:
             #creates grid from custom graph
             graph,pos,gdf = utils.herd_sett_graph(F,S,graph_seed)
             self.grid = grid_from_spatial_graph(self, graph)
             self.G = graph
             self.pos = pos
             self.gdf = gdf
-        else:
-            self.G,pos = utils.create_graph(graph_type, graph_seed, total)
-            self.grid = NetworkGrid(self.G)
-            self.pos=None
-            #add some setts first
-            added=[]
-            for node in random.sample(list(self.G.nodes()), self.num_setts):
-                sett = Sett(node, self)
-                self.grid.place_agent(sett, node)
-                added.append(node)
-
-            for node in self.G.nodes():
-                if node in added: continue
-                farm = Farm(node, self)
-                self.grid.place_agent(farm, node)
 
         #add cows randomly
         strains = strain_names
-
         infectedcount=0
         for i in range(self.num_cows):
             animal = self.add_animal()

@@ -123,7 +123,7 @@ def random_points(n, bounds=(10,10,1000,1000), seed=None):
     """Random points"""
 
     np.random.seed(seed)
-    points = []    
+    points = []
     minx, miny, maxx, maxy = bounds
     x = np.random.uniform( minx, maxx, n)
     y = np.random.uniform( miny, maxy, n)
@@ -159,7 +159,7 @@ def geodataframe_to_graph(gdf, key=None, attrs=[], d=200):
 
     from scipy.spatial import distance_matrix
 
-    cent= gdf.geometry.values
+    cent = gdf.geometry.values
     coords = [(i.x,i.y) for i in cent]
     distances = distance_matrix(coords,coords)
 
@@ -390,47 +390,47 @@ def contiguous_parcels(parcels):
         res[i] = list(x.index)
     return res
 
-def network_from_land_parcels(cells=100,farms=20,setts=0,dist=100,**kwargs):
+def land_parcels_to_graph(farms,dist=100,attrs=['loc_type','herd'], **kwargs):
     """
     Create simulated land parcels and associated contact network.
-    Args: 
+    Args:
+        farms: land parcels, geodataframe of multipolygons
         dist: max distance at which to connect two nodes
+        attrs: attributes in parcels gdf to add to graph nodes
         see utils.generate_land_parcels
     Returns:
-        land parcels - geodataframe
         centroids - geodataframe
         graph - networkx graph
         pos - positions for graph
     """
 
-    farms = generate_land_parcels(cells,farms,**kwargs)
 
     #add setts
-    setts = random_geodataframe(setts)
-    setts['loc_type']='sett'
-    setts['color'] = 'blue'
+    #setts = random_geodataframe(setts)
+    #setts['loc_type']='sett'
+    #setts['color'] = 'blue'
 
-    #get cents
+    #get centroids of parcels
+    farms = farms.reset_index(drop=True)
     larg = farms.geometry.apply(get_largest_poly)
-    cent = gpd.GeoDataFrame(data=farms.copy(),geometry=larg.geometry.centroid)
-    cent['loc_type']='cow'
-    cent['color'] = farms.color
+    cent = gpd.GeoDataFrame(data=farms.copy(),geometry=larg.geometry.centroid)#.reset_index(drop=True)
+    cent['loc_type'] = 'herd'
 
     #make network graph
-    gdf = pd.concat([cent,setts]).reset_index(drop=True)
-    G,pos = geodataframe_to_graph(gdf, d=dist, attrs=['loc_type','herd'])
+    G,pos = geodataframe_to_graph(cent, d=dist, attrs=attrs)
 
+    print ('%s herds in network' %len(G.nodes()))
     #add egdes where nodes have contiguous parcels
-    cont = contiguous_parcels(farms)    
-    for n in G.nodes:
-        if n not in cont: 
+    cont = contiguous_parcels(farms)
+    for n in list(G.nodes):
+        if n not in cont:
             continue
         for j in cont[n]:
-            if j!=n:
+            if j!=n and not G.has_edge(j,n):
                 G.add_edge(n,j)
-    #add more egdes for setts if near any other parcels
-
-    return farms, cent, G, pos
+    #add more edges for setts if near any other parcels
+    #print (len(G.nodes()))
+    return G, pos, cent
 
 def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size',
                 cmap='Blues', title='', **kwargs):
@@ -462,7 +462,7 @@ def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size',
     if ns == 'herd_size':
         sizes = [len(n)*10 for n in model.grid.get_all_cell_contents()]
     elif ns == 'num_infected':
-        sizes = [len(n.get_infected())*10 for n in model.grid.get_all_cell_contents()]
+        sizes = [len(n.get_infected())*10+1 for n in model.grid.get_all_cell_contents()]
     elif ns == 'perc_infected':
         sizes = [len(n.get_infected())/len(n)*200 for n in model.grid.get_all_cell_contents()]
     else:
@@ -470,8 +470,9 @@ def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size',
 
     ec = ['red' if n.loc_type=='sett' else 'black' for n in model.grid.get_all_cell_contents()]
     if pos == None:
-        pos = nx.kamada_kawai_layout(graph)
-    nx.draw(graph, pos, width=.1, node_color=node_colors,node_size=sizes, cmap=cmap,
+        pos = model.pos
+
+    nx.draw(graph, pos, width=.1, node_color=node_colors,node_size=sizes, #cmap=cmap,
             edgecolors=ec,linewidths=0.8,alpha=0.8,
             font_size=8,ax=ax, **kwargs)
     #ax.legend()
@@ -480,11 +481,11 @@ def plot_grid(model,ax,pos=None,colorby='loc_type', ns='herd_size',
     plt.tight_layout()
     return
 
-def plot_grid_bokeh(model,title='', ns='num_infected'):
+def plot_grid_bokeh(model,title='', ns='num_infected', parcels=None):
     """Plot netword for model with bokeh"""
 
     from bokeh.plotting import show,figure, from_networkx
-    from bokeh.models import (BoxZoomTool, Circle, HoverTool, Label, LabelSet,
+    from bokeh.models import (BoxZoomTool, Circle, HoverTool, PanTool, Label, LabelSet,
                               MultiLine, Plot, Range1d, ResetTool)
     from bokeh.models.sources import ColumnDataSource
 
@@ -506,10 +507,11 @@ def plot_grid_bokeh(model,title='', ns='num_infected'):
 
     def calc_layout(G: nx.Graph, scale=None, center=None):
         return {i:list(model.pos[i]) for i in model.pos}
+
     if model.pos == None:
-        pos =  nx.spring_layout
+        pos = nx.spring_layout
     else:
-        pos=calc_layout
+        pos = calc_layout
 
     plot = Plot(sizing_mode='stretch_width', plot_height=600, title=title)
 
@@ -531,8 +533,8 @@ def plot_grid_bokeh(model,title='', ns='num_infected'):
     plot.renderers.append(graph_renderer)
     node_hover_tool = HoverTool(tooltips=[("id", "@id"), ("loc_type", "@loc_type"),
                                           ("size", "@size"), ("infected", "@infected")])
-    plot.add_tools(node_hover_tool, BoxZoomTool(), ResetTool())
-
+    plot.add_tools(node_hover_tool, BoxZoomTool(), PanTool(), ResetTool())
+    plot.toolbar.logo = None 
     return plot
 
 def plot_inf_data(model):

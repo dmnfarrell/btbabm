@@ -2,7 +2,7 @@
 
 # bTBabm - Agent based model for bovine TB spread in herds.
 
-This is a Python package that simulates Bovine TB spread amongst herds and badgers. It uses the Mesa package for implementing an Agent based model.
+This is a Python package that simulates Bovine TB spread amongst herds and badgers. It uses the Mesa package for implementing an Agent based model. This code is experimental and for research purposes only. Code may be subject to significant change.
 
 ## Parameters
 

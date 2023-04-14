@@ -159,8 +159,8 @@ def simulate_test_data():
     print (len(gdf))
     return model
 
-def test(snp_cutoff=15):
-    """test with simulated data from ABM model"""
+def get_test_data(snp_cutoff=15):
+    """get data into arrays for fitting"""
 
     col='id'
     meta = pd.read_csv('../notebooks/meta.csv')
@@ -185,15 +185,40 @@ def test(snp_cutoff=15):
     X, y = filter_regr_data(X,y,snp_cutoff)
     print ('filtered samples')
     print(len(X), len(y))
+    return X,y
 
+def parameter_test():
+    """Parameter space test """
+
+    from sklearn import ensemble
+    from sklearn.model_selection import GridSearchCV, KFold
+
+    model = ensemble.GradientBoostingRegressor()
+    n_estimators = [50, 200, 500]
+    max_depth = [2, 4, 6, 8]
+
+    param_grid = dict(max_depth=max_depth, n_estimators=n_estimators)
+    kfold = KFold(n_splits=2, shuffle=True, random_state=0)
+    grid_search = GridSearchCV(model, param_grid, scoring="neg_mean_absolute_error", n_jobs=-1, cv=kfold,verbose=1)
+
+    X,y = get_test_data()
+    grid_result = grid_search.fit(X, y)
+    return grid_result
+
+def test(snp_cutoff=15, model='gbr'):
+    """test with simulated data from ABM model"""
+
+    X,y = get_test_data(snp_cutoff)
     from sklearn.model_selection import train_test_split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.3, random_state=13
     )
-    reg = fit_gradientboostingregressor(X_train,y_train)
-    #reg1 = fit_random_forest(X_train,y_train)
-    model_report(reg, X_test, y_test)
+    if model == 'gbr':
+        reg = fit_gradientboostingregressor(X_train,y_train)
+    elif model == 'forest':
+        reg = fit_random_forest(X_train,y_train)
 
+    model_report(reg, X_test, y_test)
     return X,y
 
 if __name__ == '__main__':
