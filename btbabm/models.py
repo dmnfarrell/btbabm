@@ -150,12 +150,6 @@ class Location(object):
     def __len__(self):
         return len(self.animals)
 
-    #def __str__(self):
-    #    return json.dumps(dict(self), ensure_ascii=False)
-
-    #def toJSON(self):
-    #    return json.dumps(dict(self), ensure_ascii=False)
-
 class Farm(Location):
      def __init__(self, unique_id, model, herd_class=None):
         super().__init__(unique_id, model)
@@ -394,7 +388,7 @@ class FarmPathogenModel(Model):
                  mean_stay_time=300, mean_inf_time=60, mean_latency_time=100,
                  cctrans=0.01, bctrans=0.001,
                  infected_start=5, allow_moves=False,
-                 seq_length=100,
+                 seq_length=200,
                  graph_seed=None,
                  callback=None):
 
@@ -446,6 +440,7 @@ class FarmPathogenModel(Model):
             self.grid = grid_from_spatial_graph(self, graph)
             self.G = graph
             self.pos = pos
+            self.gdf = utils.graph_to_geodataframe(graph)
             self.num_farms = len(self.G.nodes())
         else:
             #creates grid from custom graph
@@ -659,42 +654,67 @@ class FarmPathogenModel(Model):
             new = seqs
         return new
 
-    def make_phylogeny(self, removed=False, redundant=True):
-        """Phylogeny of sequences"""
+    def make_phylogeny(self, infile, treefile='tree.newick'):
+        """Phylogeny from sequence alignment file"""
 
-        import snipgenie
-        seqs = self.get_sequences(removed, redundant)
-        infile = 'temp.fasta'
-        SeqIO.write(seqs,infile,'fasta')
         try:
-            utils.run_fasttree(infile, '.', bootstraps=50)
+            utils.run_fasttree(infile, treefile, bootstraps=50)
         except Exception as e:
             print ('fasttree error')
             print(e)
             return
-        ls = len(seqs[0])
-        snipgenie.trees.convert_branch_lengths('tree.newick','tree.newick', ls)
-        return seqs
+        aln = AlignIO.read(infile,'fasta')
+        ls = len(aln[0])
+        utils.convert_branch_lengths(treefile, treefile, ls)
+        return
 
-    def get_clades(self, newick=None, removed=False, redundant=True):
+    def get_clades(self, newick):
         """Get clades from newick tree"""
 
-        if newick == None:
-            seqs = self.make_phylogeny(removed, redundant)
-            newick = 'tree.newick'
+        #replace this
         import snipgenie
         cl = snipgenie.trees.get_clusters(newick).astype(str)
         return cl
 
     def get_geodataframe(self,removed=False):
-        """Get geodataframe of all animal locations, assumes we are using a graph
-        with positions.
+        """Get geodataframe of all animal locations, assumes we have a gdf
+        storing all herd positions.
         """
 
         animals = self.get_animal_data(removed=removed)
         self.gdf = self.gdf.rename(columns={'ID':'herd'})
         gdf = self.gdf.merge(animals,on='herd',how='inner')
         return gdf
+
+    def get_metadata(self, removed=True, subsample=None, treefile='tree.newick'):
+        """Get derived data from model for testing purposes.
+         Returns:
+            gdf: geodataframe for animals
+            meta: meta data dataframe
+            snpdist: snp distance matrix from current phylogeny
+         """
+
+        seqs = self.get_sequences(removed=True, redundant=False)
+        aln = AlignIO.MultipleSeqAlignment(seqs)
+
+        #only keep informative positions
+        self.aln = utils.get_nonredundant_alignment(aln)
+
+        alnfile = 'temp.fasta'
+        AlignIO.write(self.aln,alnfile,'fasta')
+
+        self.make_phylogeny(alnfile, treefile)
+        snpdist = utils.snp_dist_matrix(self.aln)
+        cl = self.get_clades(treefile)
+
+        meta = self.get_animal_data(removed=True,infected=True)
+        meta = meta.merge(cl,left_on='id',right_on='SequenceName')
+        meta = meta[meta.id.isin(snpdist.index)]
+
+        gdf = self.get_geodataframe(removed=True)
+        gdf = gdf[gdf.id.isin(snpdist.index)]
+        self.snpdist = snpdist
+        return gdf, snpdist, meta
 
     def plot(self, ax=None):
         """Shorthand for using utils.plot_grid"""

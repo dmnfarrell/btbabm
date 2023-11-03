@@ -16,6 +16,10 @@ import geopandas as gpd
 import networkx as nx
 from . import models, utils
 
+meta = pd.read_csv('../notebooks/meta.csv')
+snpdist = pd.read_csv('../notebooks/snpdist.csv',index_col=0)
+cent = gpd.read_file('../notebooks/cent.shp.zip')
+
 def flatten_matrix(df):
     """Flatten a symmetrical matrix"""
 
@@ -77,7 +81,7 @@ def fit_gradientboostingregressor(X,y):
     from sklearn import datasets, ensemble
     params = {
         "n_estimators": 500,
-        "max_depth": 4,
+        "max_depth": 6,
         "min_samples_split": 5,
         "learning_rate": 0.01,
         "loss": "squared_error",
@@ -111,6 +115,12 @@ def model_report(reg, X, y):
     )
     ax.set_title("Permutation Importance (test set)")
     fig.tight_layout()
+    r=result
+    for i in r.importances_mean.argsort()[::-1]:
+        if r.importances_mean[i] - 2 * r.importances_std[i] > 0:
+            print(f"{X.columns[i]:<20}"
+                  f"{r.importances_mean[i]:.3f}"
+                  f" +/- {r.importances_std[i]:.3f}")
     return
 
 def create_regr_data(M, colnames):
@@ -137,38 +147,18 @@ def filter_regr_data(X,y,cutoff=20):
     X = X.loc[y.index]
     return X,y
 
-def simulate_test_data():
-    """simulate data with ABM and write out meta data"""
-
-    model = models.FarmPathogenModel(200,3000,0,graph_seed=5,seq_length=100,allow_moves=False)
-    for i in range(2000):
-        model.step()
-    meta = model.get_animal_data(removed=True,infected=True)
-    #print (meta)
-    #seqs = model.get_sequences(removed=True,redundant=False)
-    model.make_phylogeny(removed=True,redundant=False)
-    aln = AlignIO.read('temp.fasta','fasta')
-    snpdist = utils.snp_dist_matrix(aln)
-    meta = meta[meta.id.isin(snpdist.index)]
-    snpdist.to_csv('snpdist.csv')
-    meta.to_csv('meta.csv',index=False)
-
-    gdf = model.get_geodataframe(removed=True)
-    gdf = gdf[gdf.id.isin(snpdist.index)]
-    gdf.to_file('cent.shp.zip')
-    print (len(gdf))
-    return model
-
-def get_test_data(snp_cutoff=15):
+def get_test_data(meta, snpdist, cent, snp_cutoff=15, subsample=0):
     """get data into arrays for fitting"""
 
     col='id'
-    meta = pd.read_csv('../notebooks/meta.csv')
-    snpdist = pd.read_csv('../notebooks/snpdist.csv',index_col=0)
-    cent = gpd.read_file('../notebooks/cent.shp.zip')
 
-    #print (cent)
-    idx=list(meta.id)
+    if subsample > 5:
+        meta = meta.sample(subsample)
+        idx = list(meta.id)
+        snpdist = snpdist.loc[idx,idx]
+        cent = cent[cent.id.isin(idx)]
+
+    idx = list(meta.id)
     print ('%s samples' %len(snpdist))
     #get metrics
     y = flatten_matrix(snpdist.loc[idx,idx])
@@ -201,14 +191,14 @@ def parameter_test():
     kfold = KFold(n_splits=2, shuffle=True, random_state=0)
     grid_search = GridSearchCV(model, param_grid, scoring="neg_mean_absolute_error", n_jobs=-1, cv=kfold,verbose=1)
 
-    X,y = get_test_data()
+    X,y = get_test_data(meta, snpdist, cent, 15)
     grid_result = grid_search.fit(X, y)
     return grid_result
 
-def test(snp_cutoff=15, model='gbr'):
+def test(snp_cutoff=15, model='gbr', subsample=0):
     """test with simulated data from ABM model"""
 
-    X,y = get_test_data(snp_cutoff)
+    X,y = get_test_data(meta, snpdist, cent, snp_cutoff, subsample)
     from sklearn.model_selection import train_test_split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.3, random_state=13

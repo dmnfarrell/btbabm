@@ -17,7 +17,7 @@ import pylab as plt
 import networkx as nx
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from Bio import SeqIO, AlignIO
+from Bio import SeqIO, AlignIO, Phylo
 import json
 import toytree
 import geopandas as gpd
@@ -56,6 +56,23 @@ def random_sequence(length=50):
         seq += random.choice("CGTA")
     return seq
 
+def get_nonredundant_alignment(aln):
+    """Informative positions from aln"""
+
+    keepcols = []
+    for i in range(aln.get_alignment_length()):
+        column = aln[:, i]
+        if len(set(column)) > 1:
+            keepcols.append(i)
+    new_records = []
+    for record in aln:
+        new_seq = ''.join([record.seq[i] for i in keepcols])
+        new_records.append(SeqRecord(Seq(new_seq), id=record.id, description=record.description))
+
+    # Create a new MultipleSeqAlignment object from the new list of SeqRecord objects
+    new = AlignIO.MultipleSeqAlignment(new_records)
+    return new
+
 def random_hex_color():
     """random hex color"""
 
@@ -67,6 +84,16 @@ def random_hex_colors(n=1,seed=None):
     if seed != None:
         np.random.seed(seed)
     return [random_hex_color() for i in range(n)]
+
+def hex_colors(n=1, cmap='viridis'):
+
+    from matplotlib.colors import ListedColormap
+    # Create a colormap
+    cmap = plt.cm.get_cmap(cmap)
+    # Generate a list of n hex colors
+    colors = cmap.colors[:n]
+    colors = ListedColormap(colors).colors
+    return colors
 
 def create_graph(graph_type, graph_seed, size=10):
     """Predefined graphs"""
@@ -189,6 +216,21 @@ def geodataframe_to_graph(gdf, key=None, attrs=[], d=200):
         G.add_edge(u, v, weight=round(d,1))
 
     return G,pos
+
+def graph_to_geodataframe(G):
+    """Convert graph positions to gdf"""
+
+    points = []
+    types = []
+    for node in G.nodes():
+        pos = G.nodes[node]['pos']
+        point = Point(pos)
+        points.append(point)
+        types.append(G.nodes[node]['loc_type'])
+
+    # create a GeoDataFrame from the list of points
+    gdf = gpd.GeoDataFrame({'ID': list(G.nodes()), 'geometry': points, 'loc_type': types})
+    return gdf
 
 def delaunay_pysal(gdf, key=None, attrs=[]):
     """Get delaunay graph from gdf of points using libpysal"""
@@ -363,6 +405,7 @@ def generate_land_parcels(cells=100,herds=10,empty=0,fragments=0,
     farms['herd'] = farms.apply(lambda x: get_short_uid(4),1)
     farms['fragments'] = farms.geometry.apply(count_fragments)
     farms['color'] = random_hex_colors(len(farms),seed=seed)
+    farms['loc_type'] = 'herd'
     return farms
 
 def pashuffle(data, perc=.1, seed=None):
@@ -487,7 +530,7 @@ def plot_grid_bokeh(model,title='', ns='num_infected', parcels=None):
     from bokeh.plotting import show,figure, from_networkx
     from bokeh.models import (BoxZoomTool, Circle, HoverTool, PanTool, Label, LabelSet,
                               MultiLine, Plot, Range1d, ResetTool)
-    from bokeh.models.sources import ColumnDataSource
+    from bokeh.models.sources import ColumnDataSource, GeoJSONDataSource
 
     G = model.G.copy()
     for n in G.nodes:
@@ -533,8 +576,13 @@ def plot_grid_bokeh(model,title='', ns='num_infected', parcels=None):
     plot.renderers.append(graph_renderer)
     node_hover_tool = HoverTool(tooltips=[("id", "@id"), ("loc_type", "@loc_type"),
                                           ("size", "@size"), ("infected", "@infected")])
+
+    if parcels is not None:
+        geosource = GeoJSONDataSource(geojson = parcels.to_json())
+        plot.patches('xs','ys', source=geosource, fill_alpha=.4, line_width=0.2, fill_color='gray', line_color='black')
+
     plot.add_tools(node_hover_tool, BoxZoomTool(), PanTool(), ResetTool())
-    plot.toolbar.logo = None 
+    plot.toolbar.logo = None
     return plot
 
 def plot_inf_data(model):
@@ -559,14 +607,14 @@ def plot_by_species(model):
     ax=x.plot(kind='bar')
     return ax.get_figure()
 
-def draw_tree(filename,df=None,col=None,width=500,**kwargs):
+def draw_tree(filename,df=None,col=None,cmap=None,node_sizes=0,width=500,height=500,**kwargs):
+    """Draw newick tree with toytree"""
 
     tre = toytree.tree(filename)
     if df is not None:
-        if col == 'strain':
-            cmap = strain_cmap
-        else:
-            cmap = ({c:random_hex_color() for c in df[col].unique()})
+        labels = df[col].unique()
+        if cmap == None:
+            cmap = ({c:random_hex_color() if c in labels else 'black' for c in labels})
 
         df['color'] = df[col].apply(lambda x: cmap[x])
         idx=tre.get_tip_labels()
@@ -577,20 +625,30 @@ def draw_tree(filename,df=None,col=None,width=500,**kwargs):
     else:
         tip_colors = None
         node_colors = None
-        node_sizes = None
 
-    canvas,axes,mark = tre.draw(scalebar=True,edge_widths=.5,height=600,width=width,
-                                tip_labels_colors=tip_colors,node_colors=node_colors,node_sizes=node_sizes,**kwargs)
+    canvas,axes,mark = tre.draw(scalebar=True,edge_widths=.5,height=height,width=width,
+                                tip_labels_colors=tip_colors,node_colors=node_colors,
+                                node_sizes=node_sizes,**kwargs)
     return canvas
 
-def run_fasttree(infile, outpath, bootstraps=100):
+def run_fasttree(infile, outfile='tree.newick', bootstraps=100):
     """Run fasttree"""
 
     fc = 'fasttree'
-    out = os.path.join(outpath,'tree.newick')
-    cmd = '{fc} -nt {i} > {o}'.format(fc=fc,b=bootstraps,i=infile,o=out)
+    cmd = '{fc} -nt {i} > {o}'.format(fc=fc,b=bootstraps,i=infile,o=outfile)
     tmp = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
-    return out
+    return
+
+def convert_branch_lengths(treefile, outfile, snps):
+    """Re-scale branch lengths to no. of snps"""
+
+    tree = Phylo.read(treefile, "newick")
+    for parent in tree.find_clades(terminal=False, order="level"):
+            for child in parent.clades:
+                if child.branch_length:
+                    child.branch_length *= snps
+    Phylo.write(tree, outfile, "newick")
+    return
 
 def diffseqs(seq1,seq2):
     """Diff two sequences"""
