@@ -707,14 +707,16 @@ class FarmPathogenModel(Model):
         snpdist = utils.snp_dist_matrix(self.aln)
         cl = self.get_clades(treefile)
 
-        meta = self.get_animal_data(removed=True,infected=True)
+        #meta = self.get_animal_data(removed=True,infected=True)
+        meta = self.get_geodataframe(removed=True)
         meta = meta.merge(cl,left_on='id',right_on='SequenceName')
         meta = meta[meta.id.isin(snpdist.index)]
 
-        gdf = self.get_geodataframe(removed=True)
-        gdf = gdf[gdf.id.isin(snpdist.index)]
+        #gdf = self.get_geodataframe(removed=True)
+        #gdf = gdf[gdf.id.isin(snpdist.index)]
+
         self.snpdist = snpdist
-        return gdf, snpdist, meta
+        return meta, snpdist
 
     def plot(self, ax=None):
         """Shorthand for using utils.plot_grid"""

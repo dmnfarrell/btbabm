@@ -329,8 +329,9 @@ def count_fragments(x):
     else:
         return 1
 
-def generate_land_parcels(cells=100,herds=10,empty=0,fragments=0,
-                        fragmented_farms=1,seed=None):
+def generate_land_parcels(cells=100,herds=10,empty=0, fragments=0,
+                        fragmented_farms=1, seed=None,
+                        bounds=None, crs=None):
     """
     Simulate land parcels with fragmentation.
     Args:
@@ -338,6 +339,9 @@ def generate_land_parcels(cells=100,herds=10,empty=0,fragments=0,
         herds: number of farms
         empty: fraction of fragments that are empty
         fragments: number of empty cells to add back as fragments
+        fragmented_farms: no. of fragmented farms
+        bounds: bounds of points [x1,y1,x2,y2]
+        crs: crs of parcels if needed
     """
 
     from shapely.geometry import Point,MultiPoint,MultiPolygon,Polygon
@@ -349,7 +353,11 @@ def generate_land_parcels(cells=100,herds=10,empty=0,fragments=0,
     k = herds
     if seed != None:
         np.random.seed(seed)
-    x,y = np.random.randint(1,1000,n),np.random.randint(1,1000,n)
+
+    if bounds == None:
+        bounds = [1,1,1000,1000]
+    x1,y1,x2,y2 = bounds
+    x,y = np.random.randint(x1,x2,n),np.random.randint(y1,y2,n)
     coords = np.column_stack((x, y))
     cells, generators = voronoi_frames(coords, clip="extent")
     centroids = cells.geometry.centroid
@@ -406,6 +414,8 @@ def generate_land_parcels(cells=100,herds=10,empty=0,fragments=0,
     farms['fragments'] = farms.geometry.apply(count_fragments)
     farms['color'] = random_hex_colors(len(farms),seed=seed)
     farms['loc_type'] = 'herd'
+    if crs != None:
+        fards = farms.set_crs(crs)
     return farms
 
 def pashuffle(data, perc=.1, seed=None):
