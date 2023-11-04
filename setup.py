@@ -1,7 +1,7 @@
 from setuptools import setup
 import sys,os
 
-with open('btbabm/description.txt') as f:
+with open('description.txt') as f:
     long_description = f.read()
 
 setup(
