@@ -190,7 +190,7 @@ class Animal(object):
 
     def contact_neighbours(self):
         """
-        Contact a neighbouring node. Only farms with nearby generate_land_parcels
+        Contact a neighbouring node. Only farms with contiguous parcels
         should have connected nodes. Any animal can contact one in the other location.
         """
 
@@ -243,7 +243,7 @@ class Badger(Animal):
         self.death_age = abs(int(random.normalvariate(5*365,1000)))
         #self.latency_period = abs(int(random.normalvariate(200,100)))
         self.latency_period = random.randint(1,model.mean_latency_time)
-        self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time*2,100)))
+        self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time*2,10)))
         self.moves = []
 
     def contact(self):
@@ -291,7 +291,7 @@ class Cow(Animal):
         #natural age
         self.death_age = abs(int(random.normalvariate(4*365,1000)))
         #time after infection to death
-        self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,100)))
+        self.time_to_death = abs(int(random.normalvariate(model.mean_inf_time,10)))
         #latency period when not infectious
         #self.latency_period = abs(int(random.normalvariate(model.mean_latency_time,100)))
         self.latency_period = random.randint(1,model.mean_latency_time)
@@ -352,7 +352,7 @@ class Cow(Animal):
         self.stay_time = abs(int(random.normalvariate(model.mean_stay_time,100)))
         current_farm.moves += 1
         t = model.schedule.time
-        self.moves.append([curr, new, t])
+        self.moves.append([new, t, 'f_to_f'])
         return
 
     def infection_status(self):
@@ -524,9 +524,12 @@ class FarmPathogenModel(Model):
         animal = Cow(model=self)
         if farm == None:
             farm = random.choice(self.get_farms())
-
+        t = self.schedule.time
         animal.location = farm.unique_id
+        #add animal to herd
         farm.animals.append(animal)
+        #birth move
+        animal.moves.append([animal.location, t, 'birth'])
         self.schedule.add(animal)
         self.agents_added += 1
         return animal
@@ -619,8 +622,12 @@ class FarmPathogenModel(Model):
 
         return self.get_animal_data(infected=True)
 
-    def get_moves(self, removed=False):
-        """Return all moves"""
+    def get_moves(self, removed=False, birth=True):
+        """Return all moves.
+        Args:
+            removed: include removed animals that have died, default False
+            birth: include birth moves, default True
+        """
 
         res = []
         animals = self.get_animals()
@@ -630,7 +637,13 @@ class FarmPathogenModel(Model):
             for m in a.moves:
                 if len(m)>0:
                     res.append([a.unique_id,a.death_time]+m)
-        return pd.DataFrame(res,columns=['id','death_time','start','end','time'])
+        df = pd.DataFrame(res,columns=['id','death_time','move_to','time','event_type'])
+        #convert days to dates for convenience
+        start_date = pd.to_datetime('2012-01-01')
+        df['move_date'] = start_date + pd.to_timedelta(df.time, unit='D')
+        if birth == False:
+            df = df[df.event_type!='birth']
+        return df
 
     def get_sequences(self, removed=False, redundant=True):
         """Get strain sequences of infected"""
@@ -668,13 +681,14 @@ class FarmPathogenModel(Model):
         utils.convert_branch_lengths(treefile, treefile, ls)
         return
 
-    def get_clades(self, newick):
-        """Get clades from newick tree"""
+    def get_clades(self, snpdist):
+        """Get clades from snp distance"""
 
         #replace this
-        import snipgenie
-        cl = snipgenie.trees.get_clusters(newick).astype(str)
-        return cl
+        from snipgenie import clustering
+        #cl = snipgenie.trees.get_clusters(newick).astype(str)
+        clusts,members = clustering.get_cluster_levels(snpdist)
+        return clusts
 
     def get_geodataframe(self,removed=False):
         """Get geodataframe of all animal locations, assumes we have a gdf
@@ -688,10 +702,10 @@ class FarmPathogenModel(Model):
 
     def get_metadata(self, removed=True, subsample=None, treefile='tree.newick'):
         """Get derived data from model for testing purposes.
-         Returns:
-            gdf: geodataframe for animals
-            meta: meta data dataframe
-            snpdist: snp distance matrix from current phylogeny
+          Args:
+            removed: include remove animals
+          Returns:
+            metadata and snpdist
          """
 
         seqs = self.get_sequences(removed=True, redundant=False)
@@ -705,11 +719,13 @@ class FarmPathogenModel(Model):
 
         self.make_phylogeny(alnfile, treefile)
         snpdist = utils.snp_dist_matrix(self.aln)
-        cl = self.get_clades(treefile)
+
+        cl = self.get_clades(snpdist)
 
         #meta = self.get_animal_data(removed=True,infected=True)
         meta = self.get_geodataframe(removed=True)
-        meta = meta.merge(cl,left_on='id',right_on='SequenceName')
+        #meta = meta.merge(cl,left_on='id',right_on='SequenceName')
+        meta = meta.merge(cl,left_on='id',right_index=True)
         meta = meta[meta.id.isin(snpdist.index)]
 
         #gdf = self.get_geodataframe(removed=True)
@@ -739,7 +755,12 @@ class FarmPathogenModel(Model):
         pickle.dump(self,ofile)
         return
 
+    def time(self):
+        return self.schedule.steps
+
     def __repr__(self):
-        l1 = 'model with %s farms, %s setts and %s animals\n' %(self.num_farms, self.num_setts, len(self.get_animals()))
-        l2 = 'CC rate:%s BC rate:%s' % (self.cctrans,self.bctrans)
+        l1 = 'model with %s farms, %s setts and %s animals\n' %(self.num_farms,
+                self.num_setts, len(self.get_animals()))
+        #l2 = 'CC rate:%s BC rate:%s' % (self.cctrans,self.bctrans)
+        l2 = 'mean inf time: %s moves: %s' % (self.mean_inf_time,self.allow_moves)
         return l1+l2

@@ -363,7 +363,7 @@ def generate_land_parcels(cells=100,herds=10,empty=0, fragments=0,
     centroids = cells.geometry.centroid
     #cluster parcels into 'herds'
     kmeans = KMeans(n_clusters=k,n_init='auto').fit(coords)
-    cells['cluster'] = kmeans.labels_
+    cells['cluster'] = kmeans.labels_.astype('object')
 
     #remove some proportion of cells randomly
     e = cells.sample(frac=empty, random_state=seed)
@@ -410,7 +410,8 @@ def generate_land_parcels(cells=100,herds=10,empty=0, fragments=0,
     #merge contiguous fragments again in case we added fragments
     farms = farms.dissolve(by='cluster').reset_index()
 
-    farms['herd'] = farms.apply(lambda x: get_short_uid(4),1)
+    #farms['herd'] = farms.apply(lambda x: get_short_uid(8),1)
+    farms['herd'] = farms.cluster
     farms['fragments'] = farms.geometry.apply(count_fragments)
     farms['color'] = random_hex_colors(len(farms),seed=seed)
     farms['loc_type'] = 'herd'
@@ -456,7 +457,6 @@ def land_parcels_to_graph(farms,dist=100,attrs=['loc_type','herd'], **kwargs):
         graph - networkx graph
         pos - positions for graph
     """
-
 
     #add setts
     #setts = random_geodataframe(setts)
@@ -616,6 +616,22 @@ def plot_by_species(model):
     #print (x)
     ax=x.plot(kind='bar')
     return ax.get_figure()
+
+def plot_parcels_graph(parcels, cent, G, pos, labels=True):
+    """Show parcels and associated graph"""
+
+    fig,ax=plt.subplots(1,2,figsize=(18,8))
+    parcels.loc[0,'color'] = 'red'
+    parcels.plot(color=parcels.color,ec='.3',alpha=0.6,ax=ax[0])
+    for idx, row in cent.iterrows():
+        ax[0].text(row.geometry.centroid.x, row.geometry.centroid.y,
+                row['herd'], ha='center', fontsize=8)
+
+    ax[0].axis('off')
+    nx.draw(G,pos,node_size=100,width=0.5,ax=ax[1],node_color=cent.color,with_labels=True,alpha=0.6,font_size=8)
+    weights = nx.get_edge_attributes(G, 'weight')
+    #w=nx.draw_networkx_edge_labels(G, pos, weights, font_size=8, ax=axs[1])
+    return fig
 
 def draw_tree(filename,df=None,col=None,cmap=None,node_sizes=0,width=500,height=500,**kwargs):
     """Draw newick tree with toytree"""
